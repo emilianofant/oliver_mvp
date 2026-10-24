@@ -1,0 +1,2 @@
+# Core detection + tracking stack; torch/opencv/numpy arrive transitively.
+ultralytics>=8.2,<9
