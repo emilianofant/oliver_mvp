@@ -1,33 +1,47 @@
 #!/usr/bin/env python3
-"""Task 01 sandbox gate: YOLOv8s + ByteTrack player-detection preview.
+"""Task 02 analysis engine: YOLOv8s + ByteTrack player tracking -> metrics JSON.
 
-Runs the model over every decoded frame of an MP4 and prints one line per
-frame (`<frameIndex> players=<count> ids=[...]`) plus a final summary line,
-optionally with a live annotated OpenCV window (--show). No metrics, no JSON:
-this script exists only to answer "are these boxes good enough?".
+Decodes the input MP4 with OpenCV and runs persistent ByteTrack detection on every
+Nth frame (--step, default 1). Emits the agreed structured time series -- per-frame
+player count and raw-pixel bbox centers with track IDs, mean movement intensity in
+px/s, a per-player summary -- plus shot-boundary segments detected by histogram
+difference between consecutive raw frames.
+
+CLI contract (frozen): analyze.py --input <mp4> --output <json> [--step N] [--model M]
+Exits 0 on success; exits 1 with a stderr message if the input is missing or zero
+frames decode. Task 01 flags (--show, --out, --conf, --save-frames) keep working.
 """
 
 import argparse
+import json
+import math
 import os
 import sys
 
 import cv2
+import numpy as np
 import torch
 from ultralytics import YOLO
 
 PERSON_CLASS_ID = 0  # COCO 'person'
+CUT_THRESHOLD = 0.005  # normalized mean-abs histogram diff; tuned on real cuts (in-shot noise <= ~0.001, cut spike >= ~0.015)
+HIST_BINS = 64  # grayscale histogram bins for shot-boundary detection
+THUMB_SIZE = (32, 32)  # downsample size before histogramming
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="YOLOv8s + ByteTrack player-detection preview")
+    parser = argparse.ArgumentParser(description="YOLOv8s + ByteTrack player analysis -> metrics JSON")
     parser.add_argument("--input", required=True, help="Path to the input MP4 file")
     parser.add_argument("--model", default="yolov8s.pt", help="Model weights (default: yolov8s.pt)")
+    parser.add_argument("--output", default=None, metavar="JSON",
+                        help="Write the structured metrics time series to this JSON file")
+    parser.add_argument("--step", type=int, default=1, help="Process every Nth frame (default 1)")
     parser.add_argument("--show", action="store_true", help="Open a live annotated OpenCV window")
     parser.add_argument("--out", default=None, help="Also write per-frame lines + summary to this file")
     parser.add_argument("--conf", type=float, default=None,
                         help="Minimum detection confidence (track mode defaults to 0.1; raise it to ignore distant/crowd people)")
     parser.add_argument("--save-frames", dest="save_frames", default=None, metavar="DIR",
-                        help="Save every frame annotated with the model's detections as JPGs into DIR")
+                        help="Save every processed frame annotated with the model's detections as JPGs into DIR")
     return parser.parse_args()
 
 
@@ -44,31 +58,44 @@ def check_input(path):
         sys.exit(1)
 
 
-def player_stats(result):
-    """Return (player_count, track_ids) for one frame's Results."""
+def frame_histogram(frame):
+    """Normalized grayscale histogram of a downsampled frame (cheap cut signal)."""
+    gray = cv2.cvtColor(cv2.resize(frame, THUMB_SIZE, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    hist = cv2.calcHist([gray], [0], None, [HIST_BINS], [0, 256]).ravel()
+    total = float(hist.sum())
+    return hist / total if total > 0 else np.zeros_like(hist)
+
+
+def player_detections(result):
+    """Return [(track_id, cx, cy)] sorted by track ID for person boxes in one frame's Results."""
     boxes = result.boxes
     if boxes is None or boxes.cls is None or getattr(boxes, "id", None) is None:
-        return 0, []
-    mask = boxes.cls.cpu().numpy() == PERSON_CLASS_ID
-    ids = [int(i) for i in boxes.id[mask].cpu().tolist()]
-    return int(mask.sum()), ids
+        return []
+    cls = boxes.cls.cpu().numpy()
+    ids = boxes.id.cpu().numpy()
+    xyxy = boxes.xyxy.cpu().numpy()
+    dets = [(int(i), float((b[0] + b[2]) / 2.0), float((b[1] + b[3]) / 2.0))
+            for i, c, b in zip(ids, cls, xyxy) if int(c) == PERSON_CLASS_ID]
+    dets.sort(key=lambda d: d[0])
+    return dets
+
+
+def median(values):
+    """Median of a non-empty list of numbers."""
+    s = sorted(values)
+    n = len(s)
+    return float(s[n // 2]) if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
 
 
 def main():
     args = parse_args()
     check_input(args.input)
+    if args.step < 1:
+        sys.stderr.write("error: --step must be >= 1\n")
+        sys.exit(1)
 
     model = YOLO(args.model)
     cuda = torch.cuda.is_available()
-    results = model.track(
-        args.input,
-        persist=True,
-        show=args.show,
-        tracker="bytetrack.yaml",  # Ultralytics' stock ByteTrack config
-        conf=args.conf,
-        device=0 if cuda else None,
-        half=cuda,
-    )
 
     out_file = None
     if args.out is not None:
@@ -87,32 +114,136 @@ def main():
             sys.stderr.write(f"error: could not create {args.save_frames} ({exc.strerror})\n")
             sys.exit(1)
 
-    frames = 0
+    cap = cv2.VideoCapture(args.input)
+    fps = float(cap.get(cv2.CAP_PROP_FPS))
+    if fps <= 0 or math.isnan(fps):
+        fps = 30.0  # metadata fallback per spec
+    meta_frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    dt = args.step / fps  # seconds between consecutive processed frames
+    cut_frames = [0]      # decoded-frame indices where a new segment starts (frame 0 always)
+    prev_hist = None
+    prev_players = None   # {track_id: (x, y)} from the previous processed frame
+    summary = {}          # track_id -> [framesVisible, totalDistancePx, maxSpeedPxPerSec]
+    frames_out = []       # per-processed-frame JSON entries
+    show_window = args.show
+    decoded = 0
     max_players = 0
     seen_ids = set()
-    for frame_index, result in enumerate(results):
-        count, ids = player_stats(result)
-        line = f"{frame_index} players={count} ids={ids}"
-        print(line, flush=True)
-        if out_file is not None:
-            out_file.write(f"{line}\n")
-        if save_dir is not None:
-            cv2.imwrite(f"{save_dir}/frame-{frame_index:05d}.jpg", result.plot(), [cv2.IMWRITE_JPEG_QUALITY, 85])
-        frames += 1
-        max_players = max(max_players, count)
-        seen_ids.update(ids)
 
-    if frames == 0:
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        frame_index = decoded
+
+        hist = frame_histogram(frame)
+        if prev_hist is not None and float(np.abs(hist - prev_hist).mean()) > CUT_THRESHOLD:
+            cut_frames.append(frame_index)  # this frame starts a new segment
+        prev_hist = hist
+
+        if frame_index % args.step == 0:
+            results = model.track(
+                frame,
+                persist=True,
+                tracker="bytetrack.yaml",  # Ultralytics' stock ByteTrack config
+                conf=args.conf,
+                device=0 if cuda else None,
+                verbose=args.output is None,  # keep stdout clean in JSON mode
+            )
+            dets = player_detections(results[0])
+            seen_ids.update(i for i, _, _ in dets)
+            max_players = max(max_players, len(dets))
+
+            speeds = []
+            for tid, x, y in dets:
+                st = summary.setdefault(tid, [0, 0.0, 0.0])
+                st[0] += 1
+                if prev_players is not None and tid in prev_players:
+                    px, py = prev_players[tid]
+                    dist = math.hypot(x - px, y - py)
+                    speed = dist / dt
+                    speeds.append(speed)
+                    st[1] += dist
+                    st[2] = max(st[2], speed)
+
+            intensity = sum(speeds) / len(speeds) if prev_players is not None and speeds else None
+            frames_out.append({
+                "t": frame_index / fps,
+                "frameIndex": frame_index,
+                "playerCount": len(dets),
+                "players": [{"track_id": tid, "x": round(x, 2), "y": round(y, 2)} for tid, x, y in dets],
+                "intensity": round(intensity, 2) if intensity is not None else None,
+            })
+            prev_players = {tid: (x, y) for tid, x, y in dets}
+
+            line = f"{frame_index} players={len(dets)} ids={[d[0] for d in dets]}"
+            print(line, flush=True)
+            if out_file is not None:
+                out_file.write(f"{line}\n")
+            if save_dir is not None:
+                cv2.imwrite(f"{save_dir}/frame-{frame_index:05d}.jpg", results[0].plot(), [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if show_window:
+                cv2.imshow("players", results[0].plot())
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    cv2.destroyAllWindows()
+                    show_window = False
+
+        decoded += 1
+
+    cap.release()
+
+    if decoded == 0:
         if out_file is not None:
             out_file.close()
         sys.stderr.write("error: no frames decoded from input\n")
         sys.exit(1)
 
-    summary = f"summary: frames={frames} max_players={max_players} unique_track_ids={len(seen_ids)}"
-    print(summary, flush=True)
+    summary_line = f"summary: frames={decoded} max_players={max_players} unique_track_ids={len(seen_ids)}"
+    print(summary_line, flush=True)
     if out_file is not None:
-        out_file.write(f"{summary}\n")
+        out_file.write(f"{summary_line}\n")
         out_file.close()
+
+    if args.show:
+        cv2.destroyAllWindows()
+
+    duration_sec = meta_frame_count / fps if meta_frame_count > 0 else (decoded - 1) / fps
+    segments = []
+    for k, start in enumerate(cut_frames):
+        end = cut_frames[k + 1] if k + 1 < len(cut_frames) else None
+        counts = [f["playerCount"] for f in frames_out
+                  if start <= f["frameIndex"] and (end is None or f["frameIndex"] < end)]
+        segments.append({
+            "startT": start / fps,
+            "endT": duration_sec if end is None else end / fps,
+            "type": "wide" if counts and median(counts) >= 3 else "close",
+        })
+
+    meta = {
+        "sourceFile": os.path.basename(args.input),
+        "model": args.model,
+        "fps": round(fps, 3),
+        "step": args.step,
+        "durationSec": duration_sec,
+        "processedFrames": len(frames_out),
+    }
+    player_summary = [
+        {"track_id": tid, "framesVisible": st[0],
+         "totalDistancePx": round(st[1], 2), "maxSpeedPxPerSec": round(st[2], 2)}
+        for tid, st in sorted(summary.items())
+    ]
+
+    if args.output is not None:
+        doc = {"meta": meta, "segments": segments, "frames": frames_out, "playerSummary": player_summary}
+        try:
+            with open(args.output, "w") as f:
+                json.dump(doc, f)
+        except OSError as exc:
+            sys.stderr.write(f"error: could not write to {args.output} ({exc.strerror})\n")
+            sys.exit(1)
+        print(f"wrote {args.output}: {len(frames_out)} frames, {len(segments)} segments, "
+              f"{len(player_summary)} tracks", flush=True)
 
 
 if __name__ == "__main__":
