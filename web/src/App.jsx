@@ -28,11 +28,12 @@ function numToStr(n) {
   return String(Math.round((n + Number.EPSILON) * 100) / 100);
 }
 
-// Sliding 5 s window over frames, maximizing mean of non-null intensity.
+// Sliding 5 s window over frames (full windows only), maximizing mean of non-null intensity.
 function findStrongestSpike(frames) {
   const pts = frames.filter((f) => f.intensity != null).map((f) => ({ t: f.t, v: f.intensity }));
   if (pts.length === 0) return null;
-  let bestStart = pts[0].t;
+  const maxT = pts[pts.length - 1].t;
+  let bestStart = null;
   let bestMean = -Infinity;
   let sum = 0;
   let j = 0;
@@ -41,13 +42,16 @@ function findStrongestSpike(frames) {
       sum += pts[j].v;
       j += 1;
     }
-    const mean = sum / (j - i);
-    if (mean > bestMean) {
-      bestMean = mean;
-      bestStart = pts[i].t;
+    if (pts[i].t + SPIKE_WINDOW_SECONDS <= maxT) {
+      const mean = sum / (j - i);
+      if (mean > bestMean) {
+        bestMean = mean;
+        bestStart = pts[i].t;
+      }
     }
     sum -= pts[i].v;
   }
+  if (bestStart == null) bestStart = Math.max(pts[0].t, maxT - SPIKE_WINDOW_SECONDS);
   return [bestStart, bestStart + SPIKE_WINDOW_SECONDS];
 }
 
