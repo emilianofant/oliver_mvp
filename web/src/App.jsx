@@ -28,31 +28,33 @@ function numToStr(n) {
   return String(Math.round((n + Number.EPSILON) * 100) / 100);
 }
 
-// Sliding 5 s window over frames (full windows only), maximizing mean of non-null intensity.
-function findStrongestSpike(frames) {
-  const pts = frames.filter((f) => f.intensity != null).map((f) => ({ t: f.t, v: f.intensity }));
-  if (pts.length === 0) return null;
-  const maxT = pts[pts.length - 1].t;
+// Sliding 5 s windows fully contained within a single wide segment, maximizing mean of non-null intensity.
+function findStrongestSpike(frames, segments) {
+  const wide = Array.isArray(segments) ? segments.filter((s) => s.type === "wide") : [];
   let bestStart = null;
   let bestMean = -Infinity;
-  let sum = 0;
-  let j = 0;
-  for (let i = 0; i < pts.length; i++) {
-    while (j < pts.length && pts[j].t <= pts[i].t + SPIKE_WINDOW_SECONDS) {
-      sum += pts[j].v;
-      j += 1;
-    }
-    if (pts[i].t + SPIKE_WINDOW_SECONDS <= maxT) {
-      const mean = sum / (j - i);
-      if (mean > bestMean) {
-        bestMean = mean;
-        bestStart = pts[i].t;
+  for (const seg of wide) {
+    const pts = frames
+      .filter((f) => f.intensity != null && f.t >= seg.startT && f.t < seg.endT)
+      .map((f) => ({ t: f.t, v: f.intensity }));
+    let sum = 0;
+    let j = 0;
+    for (let i = 0; i < pts.length; i++) {
+      while (j < pts.length && pts[j].t <= pts[i].t + SPIKE_WINDOW_SECONDS) {
+        sum += pts[j].v;
+        j += 1;
       }
+      if (pts[i].t + SPIKE_WINDOW_SECONDS <= seg.endT) {
+        const mean = sum / (j - i);
+        if (mean > bestMean) {
+          bestMean = mean;
+          bestStart = pts[i].t;
+        }
+      }
+      sum -= pts[i].v;
     }
-    sum -= pts[i].v;
   }
-  if (bestStart == null) bestStart = Math.max(pts[0].t, maxT - SPIKE_WINDOW_SECONDS);
-  return [bestStart, bestStart + SPIKE_WINDOW_SECONDS];
+  return bestStart == null ? null : [bestStart, bestStart + SPIKE_WINDOW_SECONDS];
 }
 
 function UploadZone({ onFile, uploading }) {
@@ -118,7 +120,7 @@ function ChartTooltip({ active, payload }) {
   );
 }
 
-function IntensityChart({ frames, startSec, endSec }) {
+function IntensityChart({ frames, closeSegments, startSec, endSec }) {
   const showWindow = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
   return (
     <div className="h-64 w-full">
@@ -128,6 +130,9 @@ function IntensityChart({ frames, startSec, endSec }) {
           <XAxis dataKey="t" type="number" domain={[0, "auto"]} tickFormatter={(v) => formatTime(v)} />
           <YAxis width={56} label={{ value: "px/s", angle: -90, position: "insideLeft" }} />
           <Tooltip content={<ChartTooltip />} />
+          {closeSegments.map((seg) => (
+            <ReferenceArea key={`close-${seg.startT}`} x1={seg.startT} x2={seg.endT} fill="#6b7280" fillOpacity={0.15} />
+          ))}
           {showWindow && (
             <ReferenceArea x1={startSec} x2={endSec} fill="#f59e0b" fillOpacity={0.3} stroke="#f59e0b" />
           )}
@@ -228,6 +233,7 @@ export default function App() {
   const videoRef = useRef(null);
   const [videoUrl, setVideoUrl] = useState(null);
   const [frames, setFrames] = useState([]);
+  const [segments, setSegments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [startStr, setStartStr] = useState("");
@@ -258,6 +264,7 @@ export default function App() {
       }
       setVideoUrl(data.videoUrl);
       setFrames(analysis && Array.isArray(analysis.frames) ? analysis.frames : []);
+      setSegments(analysis && Array.isArray(analysis.segments) ? analysis.segments : []);
       setStartStr("");
       setEndStr("");
       setClipUrl(null);
@@ -273,7 +280,7 @@ export default function App() {
   const windowValid = startSec != null && endSec != null && endSec > startSec;
 
   function handleAutoSelect() {
-    const win = findStrongestSpike(frames);
+    const win = findStrongestSpike(frames, segments);
     if (!win) return;
     setStartStr(numToStr(win[0]));
     setEndStr(numToStr(win[1]));
@@ -317,7 +324,12 @@ export default function App() {
         <section className="space-y-4 rounded-lg bg-white p-4 shadow">
           <h2 className="font-semibold">Player activity / intensity over time</h2>
           {frames.length > 0 ? (
-            <IntensityChart frames={frames} startSec={startSec} endSec={endSec} />
+            <IntensityChart
+            frames={frames}
+            closeSegments={segments.filter((s) => s.type === "close")}
+            startSec={startSec}
+            endSec={endSec}
+          />
           ) : (
             <div className="flex h-64 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
               Upload a clip to see the intensity chart.
