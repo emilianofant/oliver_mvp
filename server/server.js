@@ -10,8 +10,9 @@ const DATA_DIR = path.join(ROOT, "data");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 const CLIPS_DIR = path.join(DATA_DIR, "clips");
 const ANALYSIS_DIR = path.join(DATA_DIR, "analysis");
+const COURT_DIR = path.join(DATA_DIR, "court");
 
-for (const dir of [UPLOADS_DIR, CLIPS_DIR, ANALYSIS_DIR]) {
+for (const dir of [UPLOADS_DIR, CLIPS_DIR, ANALYSIS_DIR, COURT_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -105,6 +106,39 @@ app.post("/api/trim-highlight", (req, res) => {
     console.log(`[trim] done clip=clips/${outName}`);
     res.json({ clipUrl: `/data/clips/${outName}` });
   });
+});
+
+app.post("/api/court", (req, res) => {
+  const { source, court } = req.body || {};
+  const name = typeof source === "string" ? path.basename(source) : "";
+  const srcPath = path.join(UPLOADS_DIR, name);
+  if (!name || !fs.existsSync(srcPath) || !fs.statSync(srcPath).isFile()) {
+    console.error(`[court] rejected: source not found in uploads (source=${JSON.stringify(source)})`);
+    return res.status(400).json({ error: `source not found in uploads: ${JSON.stringify(source)}` });
+  }
+  const keys = ["netX", "left", "right", "top", "bottom"];
+  if (!court || typeof court !== "object" || !keys.every((k) => Number.isFinite(court[k]) && court[k] >= 0 && court[k] <= 1)) {
+    return res.status(400).json({ error: "court must have numeric netX/left/right/top/bottom in [0,1]" });
+  }
+  if (!(court.left < court.netX && court.netX < court.right && court.top < court.bottom)) {
+    return res.status(400).json({ error: "court must satisfy left < netX < right and top < bottom" });
+  }
+  const base = JSON.parse(fs.readFileSync(path.join(ROOT, "python", "court-defaults.json"), "utf8"));
+  if (Number.isFinite(req.body.videoWidth) && req.body.videoWidth > 0) base.frameWidthPx = Math.round(req.body.videoWidth);
+  if (Number.isFinite(req.body.videoHeight) && req.body.videoHeight > 0) base.frameHeightPx = Math.round(req.body.videoHeight);
+  base.court = { netX: court.netX, left: court.left, right: court.right, top: court.top, bottom: court.bottom };
+  const outName = `${path.parse(name).name}.json`;
+  fs.writeFileSync(path.join(COURT_DIR, outName), JSON.stringify(base, null, 2) + "\n");
+  console.log(`[court] saved data/court/${outName}`);
+  res.json({ saved: `data/court/${outName}` });
+});
+
+app.get("/api/court", (req, res) => {
+  const name = typeof req.query.file === "string" ? path.basename(req.query.file) : "";
+  const outName = name ? `${path.parse(name).name}.json` : "";
+  const filePath = path.join(COURT_DIR, outName);
+  if (!outName || !fs.existsSync(filePath)) return res.status(404).json({ error: `no court config for ${JSON.stringify(req.query.file)}` });
+  res.json(JSON.parse(fs.readFileSync(filePath, "utf8")));
 });
 
 app.use((err, _req, res, _next) => {
