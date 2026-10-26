@@ -125,7 +125,8 @@ def main():
     dt = args.step / fps  # seconds between consecutive processed frames
     cut_frames = [0]      # decoded-frame indices where a new segment starts (frame 0 always)
     prev_hist = None
-    prev_players = None   # {track_id: (x, y)} from the previous processed frame
+    prev_players = None        # {track_id: (x, y)} from the previous processed frame
+    pending_new_segment = False  # a segment boundary was crossed since the last processed frame
     summary = {}          # track_id -> [framesVisible, totalDistancePx, maxSpeedPxPerSec]
     frames_out = []       # per-processed-frame JSON entries
     show_window = args.show
@@ -142,6 +143,7 @@ def main():
         hist = frame_histogram(frame)
         if prev_hist is not None and float(np.abs(hist - prev_hist).mean()) > CUT_THRESHOLD:
             cut_frames.append(frame_index)  # this frame starts a new segment
+            pending_new_segment = True      # first processed frame of the new segment gets null intensity, no cross-cut association
         prev_hist = hist
 
         if frame_index % args.step == 0:
@@ -161,7 +163,8 @@ def main():
             for tid, x, y in dets:
                 st = summary.setdefault(tid, [0, 0.0, 0.0])
                 st[0] += 1
-                if prev_players is not None and tid in prev_players:
+                # never match track_id to a previous frame across a segment boundary (centers teleport between views)
+                if not pending_new_segment and prev_players is not None and tid in prev_players:
                     px, py = prev_players[tid]
                     dist = math.hypot(x - px, y - py)
                     speed = dist / dt
@@ -178,6 +181,7 @@ def main():
                 "intensity": round(intensity, 2) if intensity is not None else None,
             })
             prev_players = {tid: (x, y) for tid, x, y in dets}
+            pending_new_segment = False
 
             line = f"{frame_index} players={len(dets)} ids={[d[0] for d in dets]}"
             print(line, flush=True)
