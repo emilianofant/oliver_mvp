@@ -88,6 +88,7 @@ def median(values):
 
 
 def main():
+    ## Setup
     args = parse_args()
     check_input(args.input)
     if args.step < 1:
@@ -114,6 +115,7 @@ def main():
             sys.stderr.write(f"error: could not create {args.save_frames} ({exc.strerror})\n")
             sys.exit(1)
 
+    ## Processing
     cap = cv2.VideoCapture(args.input)
     fps = float(cap.get(cv2.CAP_PROP_FPS))
     if fps <= 0 or math.isnan(fps):
