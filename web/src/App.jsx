@@ -237,6 +237,182 @@ function ClipResult({ clipUrl }) {
   );
 }
 
+const COURT_KEYS = [
+  { key: "left", label: "Left edge" },
+  { key: "netX", label: "Net line" },
+  { key: "right", label: "Right edge" },
+  { key: "top", label: "Top edge" },
+  { key: "bottom", label: "Bottom edge" },
+];
+
+function CalibrationPanel({ videoRef, videoUrl }) {
+  const [still, setStill] = useState(null);
+  const [court, setCourt] = useState({ netX: 0.5, left: 0.14, right: 0.82, top: 0.28, bottom: 0.66 });
+  const [saving, setSaving] = useState(false);
+  const [savedPath, setSavedPath] = useState(null);
+  const [calibError, setCalibError] = useState("");
+  const boxRef = useRef(null);
+  const dragKey = useRef(null);
+
+  const sourceName = videoUrl ? videoUrl.split("/").pop() : null;
+  const baseId = sourceName ? sourceName.replace(/\.[^.]*$/, "") : null;
+  const orderValid =
+    court.left < court.netX && court.netX < court.right && court.top < court.bottom;
+
+  // Reopening a video pre-fills its saved court (if any) and drops the stale still.
+  React.useEffect(() => {
+    setStill(null);
+    if (!sourceName) return undefined;
+    let cancelled = false;
+    fetch(`/api/court?file=${encodeURIComponent(sourceName)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((cfg) => {
+        if (!cancelled && cfg && cfg.court) setCourt(cfg.court);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [sourceName]);
+
+  function grabStill() {
+    const v = videoRef.current;
+    if (!v || !Number.isFinite(v.videoWidth) || v.videoWidth <= 0) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    canvas.getContext("2d").drawImage(v, 0, 0);
+    setStill(canvas.toDataURL("image/jpeg", 0.85));
+  }
+
+  function onHandleDown(e) {
+    e.preventDefault();
+    dragKey.current = e.currentTarget.dataset.key;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+
+  function onHandleMove(e) {
+    const key = dragKey.current;
+    if (!key || !boxRef.current) return;
+    const rect = boxRef.current.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
+    setCourt((c) => ({ ...c, [key]: key === "top" || key === "bottom" ? y : x }));
+  }
+
+  function onHandleUp() {
+    dragKey.current = null;
+  }
+
+  async function handleSave() {
+    if (!sourceName) return;
+    setSaving(true);
+    setCalibError("");
+    try {
+      const v = videoRef.current;
+      const resp = await fetch("/api/court", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: sourceName,
+          court,
+          videoWidth: v ? v.videoWidth : undefined,
+          videoHeight: v ? v.videoHeight : undefined,
+        }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `save failed (${resp.status})`);
+      setSavedPath(data.saved);
+    } catch (err) {
+      setCalibError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const command = baseId && savedPath
+    ? `python python/metrics.py --input data/analysis/${baseId}.json --court ${savedPath} --output /tmp/d.json`
+    : null;
+
+  return (
+    <div className="space-y-3">
+      {!videoUrl ? (
+        <p className="text-sm text-gray-400">Upload a clip to calibrate its court.</p>
+      ) : (
+        <>
+          {still ? (
+            <div
+              ref={boxRef}
+              className="relative w-full select-none overflow-hidden rounded bg-black"
+            >
+              <img src={still} alt="Grabbed still" className="block h-auto w-full" draggable={false} />
+              {["left", "netX", "right"].map((key) => (
+                <div
+                  key={key}
+                  data-key={key}
+                  title={key}
+                  onPointerDown={onHandleDown}
+                  onPointerMove={onHandleMove}
+                  onPointerUp={onHandleUp}
+                  className="absolute top-0 h-full cursor-ew-resize touch-none bg-yellow-300/90"
+                  style={{ left: `${court[key] * 100}%`, width: 2, transform: "translateX(-50%)" }}
+                />
+              ))}
+              {["top", "bottom"].map((key) => (
+                <div
+                  key={key}
+                  data-key={key}
+                  title={key}
+                  onPointerDown={onHandleDown}
+                  onPointerMove={onHandleMove}
+                  onPointerUp={onHandleUp}
+                  className="absolute left-0 w-full cursor-ns-resize touch-none bg-yellow-300/90"
+                  style={{ top: `${court[key] * 100}%`, height: 2, transform: "translateY(-50%)" }}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-48 flex-col items-center justify-center gap-2 rounded bg-gray-50 text-sm text-gray-400">
+              <p>Scrub to a static WIDE shot before grabbing.</p>
+              <button
+                type="button"
+                onClick={grabStill}
+                className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
+              >
+                Grab still from video
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-gray-500">Drag the yellow lines over the court boundaries.</p>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs">
+            {COURT_KEYS.map(({ key, label }) => (
+              <span key={key} title={label}>
+                {key}: {Number(court[key]).toFixed(3)}
+              </span>
+            ))}
+          </div>
+          {!orderValid && (
+            <p className="text-sm text-amber-600">Ordering violated: keep left &lt; netX &lt; right and top &lt; bottom.</p>
+          )}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!orderValid || saving}
+            className="rounded bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            {saving ? "Saving…" : "Save court config"}
+          </button>
+          {calibError && <p className="text-sm text-red-600">{calibError}</p>}
+          {command && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-gray-500">Saved. Re-run analytics with this court config:</p>
+              <pre className="overflow-x-auto rounded bg-gray-900 px-3 py-2 text-xs text-green-300">{command}</pre>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const videoRef = useRef(null);
   const [videoUrl, setVideoUrl] = useState(null);
@@ -361,6 +537,10 @@ export default function App() {
           <ClipResult clipUrl={clipUrl} />
         </section>
       </div>
+      <section className="mt-6 space-y-4 rounded-lg bg-white p-4 shadow">
+        <h2 className="font-semibold">Court calibration</h2>
+        <CalibrationPanel videoRef={videoRef} videoUrl={videoUrl} />
+      </section>
     </div>
   );
 }
