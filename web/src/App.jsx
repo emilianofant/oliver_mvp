@@ -122,6 +122,8 @@ function ChartTooltip({ active, payload }) {
 
 function IntensityChart({ frames, closeSegments, startSec, endSec }) {
   const showWindow = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
+  // clamp to the data range: recharts discards a ReferenceArea whose points fall outside the axis domain
+  const maxT = frames.length ? frames[frames.length - 1].t : 0;
   return (
     <div className="h-64 w-full">
       <ResponsiveContainer width="100%" height="100%">
@@ -131,7 +133,13 @@ function IntensityChart({ frames, closeSegments, startSec, endSec }) {
           <YAxis width={56} label={{ value: "px/s", angle: -90, position: "insideLeft" }} />
           <Tooltip content={<ChartTooltip />} />
           {closeSegments.map((seg) => (
-            <ReferenceArea key={`close-${seg.startT}`} x1={seg.startT} x2={seg.endT} fill="#6b7280" fillOpacity={0.15} />
+            <ReferenceArea
+              key={`close-${seg.startT}`}
+              x1={Math.max(0, seg.startT)}
+              x2={Math.min(maxT, seg.endT)}
+              fill="#6b7280"
+              fillOpacity={0.15}
+            />
           ))}
           {showWindow && (
             <ReferenceArea x1={startSec} x2={endSec} fill="#f59e0b" fillOpacity={0.3} stroke="#f59e0b" />
