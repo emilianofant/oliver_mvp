@@ -59,7 +59,7 @@ def check_input(path):
 
 
 def frame_histogram(frame):
-    """Normalized grayscale histogram of a downsampled frame (cheap cut signal)."""
+    """Normalized grayscale histogram of a downsampled frame (cheap cut signal to detect if scene has changed)."""
     gray = cv2.cvtColor(cv2.resize(frame, THUMB_SIZE, interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
     hist = cv2.calcHist([gray], [0], None, [HIST_BINS], [0, 256]).ravel()
     total = float(hist.sum())
