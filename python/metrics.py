@@ -10,8 +10,8 @@ for the default static wide shot + all tunable thresholds) and emits one JSON wi
                  px/s floor (config), merged across gaps <= minGapBetweenRalliesSec, dropping runs
                  shorter than minRallyDurationSec. Approximate: movement-based, no ball tracking.
 3 player filter- a track is a "player" iff its median position (wide segments) lies inside the court
-                 rect AND its total displacement (wide segments) > playerMinTotalDisplacementPx;
-                 bystanders (crowd/coach/judge/cameraman) fail one of the two tests.
+                 rect AND totalDisplacement / framesVisible >= playerMinMovePerFramePx (framesVisible = wide-segment
+                 positions accumulated per track); bystanders (crowd/coach/judge/cameraman) fail one of the two tests.
 4 teams        - side = x < netX ? left : right; per-side distance/speed/active-frame/net-zone stats. Approx but stable.
 5 net aggression- subsumed in 4 via netZoneTimePct; no separate output.
 6 quadrants    - per team, fraction of active time in the four frame-space quadrants split at netX and
@@ -120,7 +120,7 @@ def check_config(cfg):
             fail(f"config.court.{key} must be a frame fraction in [0,1] (got {v})")
     if not (court["left"] < court["netX"] < court["right"] and court["top"] < court["bottom"]):
         fail("config.court must satisfy left < netX < right and top < bottom")
-    for key in ("playerMinTotalDisplacementPx", "rallyAbsoluteFloorPxPerSec",
+    for key in ("playerMinMovePerFramePx", "rallyAbsoluteFloorPxPerSec",
                 "minRallyDurationSec", "minGapBetweenRalliesSec",
                 "netZoneWidthPx", "maxPlausibleSpeedPxPerSec"):
         if check_number("config", cfg, key) < 0:
@@ -197,7 +197,7 @@ def main():
     y_mid_px = (court["top"] + court["bottom"]) / 2.0 * H
     rect_l, rect_r = court["left"] * W, court["right"] * W
     rect_t, rect_b = court["top"] * H, court["bottom"] * H
-    min_disp_px = float(cfg["playerMinTotalDisplacementPx"])
+    min_move_per_frame_px = float(cfg["playerMinMovePerFramePx"])
     floor_px_s = float(cfg["rallyAbsoluteFloorPxPerSec"])
     net_zone_px = float(cfg["netZoneWidthPx"])
     speed_cap = float(cfg["maxPlausibleSpeedPxPerSec"])
@@ -240,7 +240,9 @@ def main():
     player_ids = set()
     for tid, (xs, ys) in track_xy.items():
         mx, my = median(xs), median(ys)
-        if rect_l <= mx <= rect_r and rect_t <= my <= rect_b and disp_px.get(tid, 0.0) > min_disp_px:
+        frames_visible = len(xs)
+        if rect_l <= mx <= rect_r and rect_t <= my <= rect_b \
+                and disp_px.get(tid, 0.0) / frames_visible >= min_move_per_frame_px:
             player_ids.add(tid)
 
     # Pass B: court metrics over wide segments (filtered players only).
