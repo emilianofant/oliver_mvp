@@ -247,10 +247,11 @@ const COURT_KEYS = [
 
 const DEFAULT_COURT = { netX: 0.5, left: 0.14, right: 0.82, top: 0.28, bottom: 0.66 };
 
-// Parallelogram model: top/bottom baselines are horizontal; both sidelines share one slant (tilt), so
-// they stay parallel. Saved values remain the axis-aligned extents metrics.py consumes:
-// left/right = min/max x of each sideline's endpoints, netX = center of the mid-depth net line.
-function CourtOverlay({ court, tilt, onChange }) {
+// Trapezoid model (broadcast view): top/bottom baselines are horizontal; each sideline has its own
+// slant (leftTilt/rightTilt = bottom-x minus top-x), so the edges can converge toward the far end.
+// Saved values remain the axis-aligned extents metrics.py consumes: left/right = min/max x of each
+// sideline's endpoints, netX = center of the mid-depth net line; tilts are visual-only fit params.
+function CourtOverlay({ court, leftTilt, rightTilt, onChange }) {
   const boxRef = useRef(null);
   const dragKey = useRef(null);
 
@@ -271,8 +272,9 @@ function CourtOverlay({ court, tilt, onChange }) {
       const span = court.bottom - court.top;
       const u = span > 0 ? Math.min(1, Math.max(0, (py - court.top) / span)) : 0.5;
       // left is anchored at its min-x endpoint, right at its max-x endpoint
-      const anchorX = key === "left" ? court.left + Math.abs(tilt) / 2 : court.right - Math.abs(tilt) / 2;
-      onChange(key, court[key] + (px - (anchorX + tilt * (u - 0.5))));
+      const slant = key === "left" ? leftTilt : rightTilt;
+      const anchorX = key === "left" ? court.left + Math.abs(slant) / 2 : court.right - Math.abs(slant) / 2;
+      onChange(key, court[key] + (px - (anchorX + slant * (u - 0.5))));
     } else if (key === "top" || key === "bottom") {
       onChange(key, py);
     } else {
@@ -287,12 +289,13 @@ function CourtOverlay({ court, tilt, onChange }) {
   const { left, right, top, bottom, netX } = court;
   // sideline x (viewBox units) at depth u in [0..1] (top -> bottom); left anchored at min-x end,
   // right at max-x end, so saved {left,right} is the exact axis-aligned extent of the quad
-  const lx = (u) => (left + Math.abs(tilt) / 2 + tilt * (u - 0.5)) * 100;
-  const rx = (u) => (right - Math.abs(tilt) / 2 + tilt * (u - 0.5)) * 100;
+  const lx = (u) => (left + Math.abs(leftTilt) / 2 + leftTilt * (u - 0.5)) * 100;
+  const rx = (u) => (right - Math.abs(rightTilt) / 2 + rightTilt * (u - 0.5)) * 100;
   const topY = top * 100;
   const botY = bottom * 100;
   const midY = ((top + bottom) / 2) * 100;
-  const netHalf = Math.max(0, (right - left) / 2) * 100;
+  // net spans between the two sidelines at mid-depth (clamped if they cross)
+  const netHalf = Math.max(0, right - left - (Math.abs(leftTilt) + Math.abs(rightTilt)) / 2) * 50;
 
   const handles = [
     { key: "left", x1: lx(0), y1: topY, x2: lx(1), y2: botY, cursor: "ew-resize" },
@@ -332,7 +335,7 @@ function CourtOverlay({ court, tilt, onChange }) {
   );
 }
 
-function CourtControls({ videoRef, videoUrl, court, tilt, onTiltChange }) {
+function CourtControls({ videoRef, videoUrl, court, leftTilt, rightTilt, onLeftTiltChange, onRightTiltChange }) {
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState(null);
   const [calibError, setCalibError] = useState("");
@@ -354,7 +357,8 @@ function CourtControls({ videoRef, videoUrl, court, tilt, onTiltChange }) {
         body: JSON.stringify({
           source: sourceName,
           court,
-          tilt,
+          leftTilt,
+          rightTilt,
           videoWidth: v ? v.videoWidth : undefined,
           videoHeight: v ? v.videoHeight : undefined,
         }),
@@ -379,20 +383,24 @@ function CourtControls({ videoRef, videoUrl, court, tilt, onTiltChange }) {
         <p className="text-sm text-gray-400">Upload a clip to calibrate its court.</p>
       ) : (
         <>
-          <p className="text-xs text-gray-500">Scrub the video above to a static WIDE shot, then drag the yellow lines over the court boundaries. If the sidelines look slanted (broadcast view), nudge Edge tilt until both edge lines run parallel with them.</p>
-          <label className="flex items-center gap-2 text-sm">
-            <span className="font-medium">Edge tilt</span>
-            <input
-              type="range"
-              min="-0.5"
-              max="0.5"
-              step="0.001"
-              value={tilt}
-              onChange={(e) => onTiltChange(parseFloat(e.target.value))}
-              className="w-48 accent-yellow-400"
-            />
-            <span className="font-mono text-xs">{Number(tilt).toFixed(3)}</span>
-          </label>
+          <p className="text-xs text-gray-500">Scrub the video above to a static WIDE shot, then drag the yellow lines over the court boundaries. If the sidelines converge (broadcast view), nudge Left/Right edge tilt until each line runs along its sideline.</p>
+          {([["Left edge", leftTilt, onLeftTiltChange], ["Right edge", rightTilt, onRightTiltChange]]).map(
+            ([label, value, onChange]) => (
+              <label key={label} className="flex items-center gap-2 text-sm">
+                <span className="w-20 font-medium">{label}</span>
+                <input
+                  type="range"
+                  min="-0.5"
+                  max="0.5"
+                  step="0.001"
+                  value={value}
+                  onChange={(e) => onChange(parseFloat(e.target.value))}
+                  className="w-48 accent-yellow-400"
+                />
+                <span className="font-mono text-xs">{Number(value).toFixed(3)}</span>
+              </label>
+            )
+          )}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs">
             {COURT_KEYS.map(({ key, label }) => (
               <span key={key} title={label}>
@@ -437,7 +445,8 @@ export default function App() {
   const [clipUrl, setClipUrl] = useState(null);
   const [trimError, setTrimError] = useState("");
   const [court, setCourt] = useState(DEFAULT_COURT);
-  const [tilt, setTilt] = useState(0);
+  const [leftTilt, setLeftTilt] = useState(0);
+  const [rightTilt, setRightTilt] = useState(0);
 
   // Reopening a video pre-fills its saved court (if any).
   useEffect(() => {
@@ -448,7 +457,8 @@ export default function App() {
       .then((cfg) => {
         if (!cancelled && cfg && cfg.court) {
           setCourt(cfg.court);
-          setTilt(Number.isFinite(cfg.court.tilt) ? cfg.court.tilt : 0);
+          setLeftTilt(Number.isFinite(cfg.court.leftTilt) ? cfg.court.leftTilt : 0);
+          setRightTilt(Number.isFinite(cfg.court.rightTilt) ? cfg.court.rightTilt : 0);
         }
       })
       .catch(() => {});
@@ -531,7 +541,8 @@ export default function App() {
               <video ref={videoRef} src={videoUrl} controls className="w-full rounded" />
               <CourtOverlay
                 court={court}
-                tilt={tilt}
+                leftTilt={leftTilt}
+                rightTilt={rightTilt}
                 onChange={(key, value) => setCourt((c) => ({ ...c, [key]: Math.min(1, Math.max(0, value)) }))}
               />
             </div>
@@ -575,7 +586,15 @@ export default function App() {
       </div>
       <section className="mt-6 space-y-4 rounded-lg bg-white p-4 shadow">
         <h2 className="font-semibold">Court calibration</h2>
-        <CourtControls videoRef={videoRef} videoUrl={videoUrl} court={court} tilt={tilt} onTiltChange={(v) => setTilt(Math.min(0.5, Math.max(-0.5, v)))} />
+        <CourtControls
+          videoRef={videoRef}
+          videoUrl={videoUrl}
+          court={court}
+          leftTilt={leftTilt}
+          rightTilt={rightTilt}
+          onLeftTiltChange={(v) => setLeftTilt(Math.min(0.5, Math.max(-0.5, v)))}
+          onRightTiltChange={(v) => setRightTilt(Math.min(0.5, Math.max(-0.5, v)))}
+        />
       </section>
     </div>
   );
