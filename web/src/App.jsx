@@ -165,8 +165,10 @@ function HighlightControls({
   videoRef,
   startStr,
   endStr,
+  padStr,
   setStartStr,
   setEndStr,
+  setPadStr,
   canGenerate,
   trimming,
   error,
@@ -174,6 +176,7 @@ function HighlightControls({
   onGenerate,
 }) {
   const hasFrames = Array.isArray(frames) && frames.length > 0;
+  const padSec = toSeconds(padStr);
   function setAtPlayhead(setter) {
     const t = videoRef.current && videoRef.current.currentTime;
     if (Number.isFinite(t)) setter(numToStr(t));
@@ -203,6 +206,17 @@ function HighlightControls({
             className="w-28 rounded border border-gray-300 px-2 py-1"
           />
         </label>
+        <label className="text-sm">
+          <span className="mb-1 block font-medium">Padding (s)</span>
+          <input
+            type="number"
+            min="0"
+            step="0.5"
+            value={padStr}
+            onChange={(e) => setPadStr(e.target.value)}
+            className="w-28 rounded border border-gray-300 px-2 py-1"
+          />
+        </label>
       </div>
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={() => setAtPlayhead(setStartStr)} className="rounded bg-gray-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800">
@@ -228,6 +242,9 @@ function HighlightControls({
       >
         {trimming ? "Trimming…" : "Generate Highlight Clip"}
       </button>
+      {padSec != null && padSec > 0 && (
+        <p className="text-xs text-gray-500">Clips include ~{numToStr(padSec)} s of context on each side.</p>
+      )}
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>
   );
@@ -442,6 +459,7 @@ export default function App() {
   const [uploadError, setUploadError] = useState("");
   const [startStr, setStartStr] = useState("");
   const [endStr, setEndStr] = useState("");
+  const [padStr, setPadStr] = useState("1");
   const [trimming, setTrimming] = useState(false);
   const [clipUrl, setClipUrl] = useState(null);
   const [trimError, setTrimError] = useState("");
@@ -542,10 +560,18 @@ export default function App() {
     setTrimming(true);
     setTrimError("");
     try {
+      const padSec = Math.max(0, toSeconds(padStr) ?? 0);
+      const vDur = videoRef.current && Number.isFinite(videoRef.current.duration)
+        ? videoRef.current.duration
+        : frames[frames.length - 1].t;
+      const trimStart = Math.max(0, startSec - padSec);
+      const effectiveEnd = Math.min(vDur, endSec + padSec);
+      const duration = effectiveEnd - trimStart;
+      if (duration <= 0) throw new Error("selection is outside the video bounds");
       const resp = await fetch("/api/trim-highlight", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: videoUrl.split("/").pop(), start: startSec, duration: endSec - startSec }),
+        body: JSON.stringify({ source: videoUrl.split("/").pop(), start: trimStart, duration }),
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.error || `trim failed (${resp.status})`);
@@ -603,8 +629,10 @@ export default function App() {
               videoRef={videoRef}
               startStr={startStr}
               endStr={endStr}
+              padStr={padStr}
               setStartStr={setStartStr}
               setEndStr={setEndStr}
+              setPadStr={setPadStr}
               canGenerate={windowValid && !!videoUrl}
               trimming={trimming}
               error={trimError}
