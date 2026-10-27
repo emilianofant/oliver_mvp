@@ -9,9 +9,11 @@ for the default static wide shot + all tunable thresholds) and emits one JSON wi
 2 rallies      - per wide segment: frames whose max filtered-player speed exceeds an absolute
                  px/s floor (config), merged across gaps <= minGapBetweenRalliesSec, dropping runs
                  shorter than minRallyDurationSec. Approximate: movement-based, no ball tracking.
-3 player filter- a track is a "player" iff its median position (wide segments) lies inside the court
-                 rect AND totalDisplacement / framesVisible >= playerMinMovePerFramePx (framesVisible = wide-segment
-                 positions accumulated per track); bystanders (crowd/coach/judge/cameraman) fail one of the two tests.
+3 player filter- a track is a "player" iff ALL of: its median position (wide segments) lies inside the drawn
+                 court trapezoid (scanline test consuming the saved leftTilt/rightTilt; falls back to the axis-aligned
+                 extents rectangle when the tilt keys are absent), it has >= playerMinFramesVisible visible frames,
+                 and totalDisplacement / framesVisible >= playerMinMovePerFramePx (framesVisible = wide-segment
+                 positions accumulated per track); bystanders (crowd/coach/judge/cameraman) fail one of the three tests.
 4 teams        - side = x < netX ? left : right; per-side distance/speed/active-frame/net-zone stats. Approx but stable.
 5 net aggression- subsumed in 4 via netZoneTimePct; no separate output.
 6 quadrants    - per team, fraction of active time in the four frame-space quadrants split at netX and
@@ -120,9 +122,10 @@ def check_config(cfg):
             fail(f"config.court.{key} must be a frame fraction in [0,1] (got {v})")
     if not (court["left"] < court["netX"] < court["right"] and court["top"] < court["bottom"]):
         fail("config.court must satisfy left < netX < right and top < bottom")
-    for key in ("playerMinMovePerFramePx", "rallyAbsoluteFloorPxPerSec",
-                "minRallyDurationSec", "minGapBetweenRalliesSec",
-                "netZoneWidthPx", "maxPlausibleSpeedPxPerSec"):
+    for key in ("playerMinFramesVisible", "playerMinMovePerFramePx",
+                "rallyAbsoluteFloorPxPerSec", "minRallyDurationSec",
+                "minGapBetweenRalliesSec", "netZoneWidthPx",
+                "maxPlausibleSpeedPxPerSec"):
         if check_number("config", cfg, key) < 0:
             fail(f"config.{key} must be >= 0")
 
@@ -195,9 +198,8 @@ def main():
     court = cfg["court"]
     net_x_px = court["netX"] * W
     y_mid_px = (court["top"] + court["bottom"]) / 2.0 * H
-    rect_l, rect_r = court["left"] * W, court["right"] * W
-    rect_t, rect_b = court["top"] * H, court["bottom"] * H
     min_move_per_frame_px = float(cfg["playerMinMovePerFramePx"])
+    min_frames_visible = float(cfg["playerMinFramesVisible"])
     floor_px_s = float(cfg["rallyAbsoluteFloorPxPerSec"])
     net_zone_px = float(cfg["netZoneWidthPx"])
     speed_cap = float(cfg["maxPlausibleSpeedPxPerSec"])
@@ -237,11 +239,31 @@ def main():
                 xy[1].append(y)
         prev_pos, prev_t, prev_k = pos, t, k
 
+    # Trapezoid inside-test for the filter: same depth interpolation as the dashboard overlay's sideline drawing
+    # (web/src/App.jsx CourtOverlay lx()/rx()). Tilt keys absent/non-finite -> 0, which degenerates to the
+    # axis-aligned extents rectangle (back-compat).
+    def _tilt(v):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else 0.0
+
+    left_tilt = _tilt(court.get("leftTilt"))
+    right_tilt = _tilt(court.get("rightTilt"))
+    top_f, bot_f = court["top"], court["bottom"]
+
+    def inside_court(xf, yf):
+        # xf/yf in frame fractions (x/W, y/H); u is depth fraction, 0 at the far end -> 1 near end.
+        if not (top_f <= yf <= bot_f):
+            return False
+        u = (yf - top_f) / (bot_f - top_f)
+        lx_frac = court["left"] + abs(left_tilt) / 2.0 + left_tilt * (u - 0.5)
+        rx_frac = court["right"] - abs(right_tilt) / 2.0 + right_tilt * (u - 0.5)
+        return lx_frac <= xf <= rx_frac
+
     player_ids = set()
     for tid, (xs, ys) in track_xy.items():
         mx, my = median(xs), median(ys)
         frames_visible = len(xs)
-        if rect_l <= mx <= rect_r and rect_t <= my <= rect_b \
+        if inside_court(mx / W, my / H) \
+                and frames_visible >= min_frames_visible \
                 and disp_px.get(tid, 0.0) / frames_visible >= min_move_per_frame_px:
             player_ids.add(tid)
 
