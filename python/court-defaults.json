@@ -8,6 +8,7 @@
     "top": 0.28,
     "bottom": 0.66
   },
+  "playerMinFramesVisible": 60,
   "playerMinMovePerFramePx": 0.5,
   "rallyAbsoluteFloorPxPerSec": 100,
   "minRallyDurationSec": 2.0,
