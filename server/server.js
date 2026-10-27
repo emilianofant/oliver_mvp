@@ -80,6 +80,43 @@ app.post("/api/upload", upload.single("video"), (req, res) => {
   );
 });
 
+app.post("/api/analytics", (req, res) => {
+  const { source } = req.body || {};
+  console.log(`[analytics] request source=${source}`);
+  const name = typeof source === "string" ? path.basename(source) : "";
+  if (!name) {
+    console.error(`[analytics] rejected: invalid source (source=${JSON.stringify(source)})`);
+    return res.status(400).json({ error: `source must be a file name string (got ${JSON.stringify(source)})` });
+  }
+  const id = path.parse(name).name;
+  const analysisPath = `data/analysis/${id}.json`;
+  if (!fs.existsSync(path.join(ROOT, analysisPath))) {
+    console.error(`[analytics] rejected: no analysis for source=${name}`);
+    return res.status(404).json({ error: "no analysis for this clip" });
+  }
+  const savedCourtPath = path.join(COURT_DIR, `${id}.json`);
+  const courtSource = fs.existsSync(savedCourtPath) ? "saved" : "defaults";
+  const courtFile = courtSource === "saved" ? `data/court/${id}.json` : "python/court-defaults.json";
+  const outFile = `data/analysis/${id}-derived.json`;
+  runCmd(
+    "analytics",
+    process.env.PYTHON_BIN || path.join(ROOT, ".venv", "bin", "python"),
+    ["python/metrics.py", "--input", analysisPath, "--court", courtFile, "--output", outFile],
+    (err, stderrTail) => {
+      if (err) return res.status(500).json({ error: `analytics failed (${err.message}): ${stderrTail}` });
+      let derived;
+      try {
+        derived = JSON.parse(fs.readFileSync(path.join(ROOT, outFile), "utf8"));
+      } catch (_e) {
+        console.error(`[analytics] could not read derived output: ${outFile}`);
+        return res.status(500).json({ error: `could not read derived output: ${outFile}` });
+      }
+      console.log(`[analytics] done id=${id} courtSource=${courtSource} rallies=${derived.rallies.length}`);
+      res.json({ courtSource, derivedPath: `/data/analysis/${id}-derived.json`, derived });
+    },
+  );
+});
+
 app.post("/api/trim-highlight", (req, res) => {
   const { source, start, duration } = req.body || {};
   console.log(`[trim] request source=${source} start=${start} duration=${duration}`);
