@@ -8,10 +8,10 @@
     "top": 0.28,
     "bottom": 0.66
   },
-  "playerMinTotalDisplacementPx": 1000,
-  "rallyAbsoluteFloorPxPerSec": 200,
-  "minRallyDurationSec": 0.8,
-  "minGapBetweenRalliesSec": 1.0,
-  "netZoneWidthPx": 60,
+  "playerMinMovePerFramePx": 0.5,
+  "rallyAbsoluteFloorPxPerSec": 100,
+  "minRallyDurationSec": 2.0,
+  "minGapBetweenRalliesSec": 3.0,
+  "netZoneWidthPx": 200,
   "maxPlausibleSpeedPxPerSec": 5000
 }
