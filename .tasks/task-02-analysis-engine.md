@@ -13,7 +13,10 @@ Extend the existing `python/analyze.py` to emit the agreed structured JSON time 
   "frames": [
     { "t": 0.1, "frameIndex": 3, "playerCount": 2,
       "players": [{ "track_id": 3, "x": 412.5, "y": 388.0 }],
-      "intensity": null }
+      "intensity": null },
+    { "t": 0.2, "frameIndex": 6, "playerCount": 2,
+      "players": [{ "track_id": 3, "x": 415.0, "y": 389.5 }],
+      "intensity": 745.0, "meanSpeedPxPerSec": 268.4 }
   ],
   "playerSummary": [
     { "track_id": 3, "framesVisible": 142, "totalDistancePx": 18432.6, "maxSpeedPxPerSec": 910.2 }
@@ -32,7 +35,7 @@ Extend the existing `python/analyze.py` to emit the agreed structured JSON time 
 - Keep ByteTrack with `persist=True`; use track IDs for cross-frame association. Do NOT implement nearest-neighbor matching or any ID stitching/persistence beyond what the tracker provides.
 - **Shot-boundary segments** (needs raw frames — computed in this script only): during the decode pass, compare consecutive raw frames via a cheap histogram difference (e.g., cv2.calcHist on downsampled grayscale, normalized mean-abs-diff; start threshold ~0.15 and tune against real cuts). A frame where the diff exceeds the threshold starts a new segment (frame 0 always starts one). After inference, classify each segment `type`: `"wide"` if its median playerCount ≥ 3, else `"close"`. Emit top-level `segments` covering the full timeline contiguously: first startT = 0, last endT ≈ durationSec, no gaps or overlaps.
 - `intensity` (px/s): `dt = step / fps` seconds; for each player visible in both the current and previous processed frame, speed = Euclidean center displacement / dt; intensity = mean of those speeds; `null` on the first processed frame or when no players overlap with the previous one.
-- ⚠ **Superseded by Task 07**: `intensity` is additionally null on the first processed frame of every segment, and per-player speed/`playerSummary` accumulation never crosses a segment boundary (track IDs persist across cuts while centers teleport between views). The rule above describes pre-fix behavior; see `.tasks/task-07-segment-aware-intensity.md`.
+- ⚠ **Superseded by Tasks 07 & 08** — the effective rules are: (Task 07) `intensity` is additionally null on the first processed frame of every segment, and association/accumulation never crosses a segment boundary; (Task 08) `intensity` is the MAX per-player speed with gap-tolerant same-segment association (`MAX_GAP_FRAMES`, artifact-capped), the old mean preserved as additive field `meanSpeedPxPerSec`. The rule above describes original pre-fix behavior. See `.tasks/task-07-segment-aware-intensity.md` and `.tasks/task-08-intensity-signal-fix.md`.
 - `players[].x/y` are raw-pixel bbox centers (no normalization).
 - `playerSummary`: one entry per observed track_id — `framesVisible`, `totalDistancePx` (summed displacement across consecutive processed-frame transitions), `maxSpeedPxPerSec`.
 - Do NOT: pose/keypoints, ball/court logic; video writing or frame saving; threading/multiprocessing; retry logic. Do NOT remove or break `--show` — the preview must keep working after this task.
