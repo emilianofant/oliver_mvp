@@ -120,7 +120,7 @@ function ChartTooltip({ active, payload }) {
   );
 }
 
-function IntensityChart({ frames, closeSegments, startSec, endSec }) {
+function IntensityChart({ frames, closeSegments, rallies = [], startSec, endSec }) {
   const showWindow = Number.isFinite(startSec) && Number.isFinite(endSec) && endSec > startSec;
   // clamp to the data range: recharts discards a ReferenceArea whose points fall outside the axis domain
   const maxT = frames.length ? frames[frames.length - 1].t : 0;
@@ -139,6 +139,15 @@ function IntensityChart({ frames, closeSegments, startSec, endSec }) {
               x2={Math.min(maxT, seg.endT)}
               fill="#6b7280"
               fillOpacity={0.15}
+            />
+          ))}
+          {rallies.map((rally, i) => (
+            <ReferenceArea
+              key={`rally-${i}`}
+              x1={Math.max(0, rally.startT)}
+              x2={Math.min(maxT, rally.endT)}
+              fill="#16a34a"
+              fillOpacity={0.25}
             />
           ))}
           {showWindow && (
@@ -340,11 +349,9 @@ function CourtOverlay({ court, leftTilt, rightTilt, netY, onChange, onNetYChange
 
 function CourtControls({ videoRef, videoUrl, court, netY, leftTilt, rightTilt, onLeftTiltChange, onRightTiltChange }) {
   const [saving, setSaving] = useState(false);
-  const [savedPath, setSavedPath] = useState(null);
   const [calibError, setCalibError] = useState("");
 
   const sourceName = videoUrl ? videoUrl.split("/").pop() : null;
-  const baseId = sourceName ? sourceName.replace(/\.[^.]*$/, "") : null;
   const orderValid =
     court.left < court.netX && court.netX < court.right && court.top < court.bottom;
 
@@ -369,17 +376,12 @@ function CourtControls({ videoRef, videoUrl, court, netY, leftTilt, rightTilt, o
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.error || `save failed (${resp.status})`);
-      setSavedPath(data.saved);
     } catch (err) {
       setCalibError(err.message);
     } finally {
       setSaving(false);
     }
   }
-
-  const command = baseId && savedPath
-    ? `python python/metrics.py --input data/analysis/${baseId}.json --court ${savedPath} --output /tmp/d.json`
-    : null;
 
   return (
     <div className="space-y-3">
@@ -425,12 +427,6 @@ function CourtControls({ videoRef, videoUrl, court, netY, leftTilt, rightTilt, o
             {saving ? "Saving…" : "Save court config"}
           </button>
           {calibError && <p className="text-sm text-red-600">{calibError}</p>}
-          {command && (
-            <div className="space-y-1">
-              <p className="text-xs font-medium text-gray-500">Saved. Re-run analytics with this court config:</p>
-              <pre className="overflow-x-auto rounded bg-gray-900 px-3 py-2 text-xs text-green-300">{command}</pre>
-            </div>
-          )}
         </>
       )}
     </div>
@@ -453,6 +449,9 @@ export default function App() {
   const [leftTilt, setLeftTilt] = useState(0);
   const [rightTilt, setRightTilt] = useState(0);
   const [netY, setNetY] = useState(null);
+  const [derived, setDerived] = useState(null);
+  const [analyticsRunning, setAnalyticsRunning] = useState(false);
+  const [analyticsError, setAnalyticsError] = useState("");
 
   // Reopening a video pre-fills its saved court (if any).
   useEffect(() => {
@@ -498,6 +497,8 @@ export default function App() {
       setStartStr("");
       setEndStr("");
       setClipUrl(null);
+      setDerived(null);
+      setAnalyticsError("");
     } catch (err) {
       setUploadError(err.message);
     } finally {
@@ -514,6 +515,26 @@ export default function App() {
     if (!win) return;
     setStartStr(numToStr(win[0]));
     setEndStr(numToStr(win[1]));
+  }
+
+  async function handleRunAnalytics() {
+    if (!videoUrl || uploading || analyticsRunning) return;
+    setAnalyticsRunning(true);
+    setAnalyticsError("");
+    try {
+      const resp = await fetch("/api/analytics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: videoUrl.split("/").pop() }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `analytics failed (${resp.status})`);
+      setDerived({ ...data.derived, courtSource: data.courtSource });
+    } catch (err) {
+      setAnalyticsError(err.message);
+    } finally {
+      setAnalyticsRunning(false);
+    }
   }
 
   async function handleGenerate() {
@@ -567,6 +588,7 @@ export default function App() {
             <IntensityChart
             frames={frames}
             closeSegments={segments.filter((s) => s.type === "close")}
+            rallies={derived ? derived.rallies : []}
             startSec={startSec}
             endSec={endSec}
           />
@@ -605,6 +627,30 @@ export default function App() {
           onLeftTiltChange={(v) => setLeftTilt(Math.min(0.5, Math.max(-0.5, v)))}
           onRightTiltChange={(v) => setRightTilt(Math.min(0.5, Math.max(-0.5, v)))}
         />
+        <button
+          type="button"
+          onClick={handleRunAnalytics}
+          disabled={!videoUrl || uploading || analyticsRunning}
+          className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+        >
+          {analyticsRunning ? "Running…" : "Run analytics"}
+        </button>
+        {analyticsError && <p className="text-sm text-red-600">{analyticsError}</p>}
+        {derived && (
+          <div className="space-y-1 rounded bg-gray-50 p-3">
+            <p className="text-sm font-medium">
+              rallies: {derived.rallies.length} · players on court: {derived.clip.onCourtPlayerCount} · court: {derived.courtSource}
+            </p>
+            {derived.courtSource === "defaults" && (
+              <p className="text-xs text-amber-600">no saved court — using defaults</p>
+            )}
+            {derived.rallies.map((rally, i) => (
+              <div key={i} className="font-mono text-sm">
+                {formatTime(rally.startT)} – {formatTime(rally.endT)}
+              </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
