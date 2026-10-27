@@ -130,10 +130,15 @@ app.post("/api/court", (req, res) => {
       return res.status(400).json({ error: "edge tilts must be numbers in [-1,1]" });
     }
   }
+  const netY = req.body.netY;
+  if (netY !== undefined && (!Number.isFinite(netY) || netY < 0 || netY > 1)) {
+    return res.status(400).json({ error: "netY must be a number in [0,1]" });
+  }
   const base = JSON.parse(fs.readFileSync(path.join(ROOT, "python", "court-defaults.json"), "utf8"));
   if (Number.isFinite(req.body.videoWidth) && req.body.videoWidth > 0) base.frameWidthPx = Math.round(req.body.videoWidth);
   if (Number.isFinite(req.body.videoHeight) && req.body.videoHeight > 0) base.frameHeightPx = Math.round(req.body.videoHeight);
   base.court = { netX: court.netX, left: court.left, right: court.right, top: court.top, bottom: court.bottom };
+  if (netY !== undefined) base.court.netY = netY;
   if (leftTilt !== undefined) base.court.leftTilt = leftTilt;
   if (rightTilt !== undefined) base.court.rightTilt = rightTilt;
   const outName = `${path.parse(name).name}.json`;

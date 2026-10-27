@@ -250,8 +250,9 @@ const DEFAULT_COURT = { netX: 0.5, left: 0.14, right: 0.82, top: 0.28, bottom: 0
 // Trapezoid model (broadcast view): top/bottom baselines are horizontal; each sideline has its own
 // slant (leftTilt/rightTilt = bottom-x minus top-x), so the edges can converge toward the far end.
 // Saved values remain the axis-aligned extents metrics.py consumes: left/right = min/max x of each
-// sideline's endpoints, netX = center of the mid-depth net line; tilts are visual-only fit params.
-function CourtOverlay({ court, leftTilt, rightTilt, onChange }) {
+// sideline's endpoints, netX/netY = position of the middle (net) line — draggable freely in x and
+// y; defaults to mid-depth when no custom depth has been set. Tilts/netY are visual-only fit params.
+function CourtOverlay({ court, leftTilt, rightTilt, netY, onChange, onNetYChange }) {
   const boxRef = useRef(null);
   const dragKey = useRef(null);
 
@@ -278,7 +279,9 @@ function CourtOverlay({ court, leftTilt, rightTilt, onChange }) {
     } else if (key === "top" || key === "bottom") {
       onChange(key, py);
     } else {
+      // middle line: free 2-D placement, follows the pointer in both axes
       onChange("netX", px);
+      onNetYChange(py);
     }
   }
 
@@ -293,7 +296,7 @@ function CourtOverlay({ court, leftTilt, rightTilt, onChange }) {
   const rx = (u) => (right - Math.abs(rightTilt) / 2 + rightTilt * (u - 0.5)) * 100;
   const topY = top * 100;
   const botY = bottom * 100;
-  const midY = ((top + bottom) / 2) * 100;
+  const midY = (netY != null ? netY : (top + bottom) / 2) * 100;
   // net spans between the two sidelines at mid-depth (clamped if they cross)
   const netHalf = Math.max(0, right - left - (Math.abs(leftTilt) + Math.abs(rightTilt)) / 2) * 50;
 
@@ -335,7 +338,7 @@ function CourtOverlay({ court, leftTilt, rightTilt, onChange }) {
   );
 }
 
-function CourtControls({ videoRef, videoUrl, court, leftTilt, rightTilt, onLeftTiltChange, onRightTiltChange }) {
+function CourtControls({ videoRef, videoUrl, court, netY, leftTilt, rightTilt, onLeftTiltChange, onRightTiltChange }) {
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState(null);
   const [calibError, setCalibError] = useState("");
@@ -357,6 +360,7 @@ function CourtControls({ videoRef, videoUrl, court, leftTilt, rightTilt, onLeftT
         body: JSON.stringify({
           source: sourceName,
           court,
+          netY: netY ?? undefined,
           leftTilt,
           rightTilt,
           videoWidth: v ? v.videoWidth : undefined,
@@ -383,7 +387,7 @@ function CourtControls({ videoRef, videoUrl, court, leftTilt, rightTilt, onLeftT
         <p className="text-sm text-gray-400">Upload a clip to calibrate its court.</p>
       ) : (
         <>
-          <p className="text-xs text-gray-500">Scrub the video above to a static WIDE shot, then drag the yellow lines over the court boundaries. If the sidelines converge (broadcast view), nudge Left/Right edge tilt until each line runs along its sideline.</p>
+          <p className="text-xs text-gray-500">Scrub the video above to a static WIDE shot, then drag the yellow lines over the court boundaries. If the sidelines converge (broadcast view), nudge Left/Right edge tilt until each line runs along its sideline. The middle line drags in any direction — park it on the actual net.</p>
           {([["Left edge", leftTilt, onLeftTiltChange], ["Right edge", rightTilt, onRightTiltChange]]).map(
             ([label, value, onChange]) => (
               <label key={label} className="flex items-center gap-2 text-sm">
@@ -407,6 +411,7 @@ function CourtControls({ videoRef, videoUrl, court, leftTilt, rightTilt, onLeftT
                 {key}: {Number(court[key]).toFixed(3)}
               </span>
             ))}
+            <span title="Middle-line depth (custom)">netY: {netY == null ? "mid" : Number(netY).toFixed(3)}</span>
           </div>
           {!orderValid && (
             <p className="text-sm text-amber-600">Ordering violated: keep left &lt; netX &lt; right and top &lt; bottom.</p>
@@ -447,6 +452,7 @@ export default function App() {
   const [court, setCourt] = useState(DEFAULT_COURT);
   const [leftTilt, setLeftTilt] = useState(0);
   const [rightTilt, setRightTilt] = useState(0);
+  const [netY, setNetY] = useState(null);
 
   // Reopening a video pre-fills its saved court (if any).
   useEffect(() => {
@@ -459,6 +465,7 @@ export default function App() {
           setCourt(cfg.court);
           setLeftTilt(Number.isFinite(cfg.court.leftTilt) ? cfg.court.leftTilt : 0);
           setRightTilt(Number.isFinite(cfg.court.rightTilt) ? cfg.court.rightTilt : 0);
+          setNetY(Number.isFinite(cfg.court.netY) ? cfg.court.netY : null);
         }
       })
       .catch(() => {});
@@ -543,7 +550,9 @@ export default function App() {
                 court={court}
                 leftTilt={leftTilt}
                 rightTilt={rightTilt}
+                netY={netY}
                 onChange={(key, value) => setCourt((c) => ({ ...c, [key]: Math.min(1, Math.max(0, value)) }))}
+                onNetYChange={(v) => setNetY(Math.min(1, Math.max(0, v)))}
               />
             </div>
           ) : (
@@ -590,6 +599,7 @@ export default function App() {
           videoRef={videoRef}
           videoUrl={videoUrl}
           court={court}
+          netY={netY}
           leftTilt={leftTilt}
           rightTilt={rightTilt}
           onLeftTiltChange={(v) => setLeftTilt(Math.min(0.5, Math.max(-0.5, v)))}
