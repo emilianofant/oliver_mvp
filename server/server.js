@@ -123,10 +123,15 @@ app.post("/api/court", (req, res) => {
   if (!(court.left < court.netX && court.netX < court.right && court.top < court.bottom)) {
     return res.status(400).json({ error: "court must satisfy left < netX < right and top < bottom" });
   }
+  const tilt = req.body.tilt;
+  if (tilt !== undefined && (!Number.isFinite(tilt) || Math.abs(tilt) > 1)) {
+    return res.status(400).json({ error: "tilt must be a number in [-1,1]" });
+  }
   const base = JSON.parse(fs.readFileSync(path.join(ROOT, "python", "court-defaults.json"), "utf8"));
   if (Number.isFinite(req.body.videoWidth) && req.body.videoWidth > 0) base.frameWidthPx = Math.round(req.body.videoWidth);
   if (Number.isFinite(req.body.videoHeight) && req.body.videoHeight > 0) base.frameHeightPx = Math.round(req.body.videoHeight);
   base.court = { netX: court.netX, left: court.left, right: court.right, top: court.top, bottom: court.bottom };
+  if (tilt !== undefined) base.court.tilt = tilt;
   const outName = `${path.parse(name).name}.json`;
   fs.writeFileSync(path.join(COURT_DIR, outName), JSON.stringify(base, null, 2) + "\n");
   console.log(`[court] saved data/court/${outName}`);
