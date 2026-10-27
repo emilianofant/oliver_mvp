@@ -3,9 +3,9 @@
 
 Decodes the input MP4 with OpenCV and runs persistent ByteTrack detection on every
 Nth frame (--step, default 1). Emits the agreed structured time series -- per-frame
-player count and raw-pixel bbox centers with track IDs, mean movement intensity in
-px/s, a per-player summary -- plus shot-boundary segments detected by histogram
-difference between consecutive raw frames.
+player count and raw-pixel bbox centers with track IDs, max per-player speed in px/s
+(intensity) plus meanSpeedPxPerSec, a per-player summary -- plus shot-boundary
+segments detected by histogram difference between consecutive raw frames.
 
 CLI contract (frozen): analyze.py --input <mp4> --output <json> [--step N] [--model M]
 Exits 0 on success; exits 1 with a stderr message if the input is missing or zero
@@ -26,7 +26,9 @@ from ultralytics import YOLO
 PERSON_CLASS_ID = 0  # COCO 'person'
 CUT_THRESHOLD = 0.005  # normalized mean-abs histogram diff; tuned on real cuts (in-shot noise <= ~0.001, cut spike >= ~0.015)
 HIST_BINS = 64  # grayscale histogram bins for shot-boundary detection
-THUMB_SIZE = (32, 32)  # downsample size before histogramming
+THUMB_SIZE = (32, 32)  # downsample size before histogramting
+MAX_GAP_FRAMES = 15  # max processed-frame gap for same-segment track association (~0.5 s at fps=30 / step=1)
+MAX_SPEED_PX_PER_SEC = 5000  # transitions implying faster are dropped (ByteTrack id-recycling teleports); far above plausible close-up sprint speeds
 
 
 def parse_args():
@@ -125,7 +127,7 @@ def main():
     dt = args.step / fps  # seconds between consecutive processed frames
     cut_frames = [0]      # decoded-frame indices where a new segment starts (frame 0 always)
     prev_hist = None
-    prev_players = None        # {track_id: (x, y)} from the previous processed frame
+    last_seen = {}            # {track_id: [x, y, frameIndex]} within the current segment only (gap-tolerant association)
     pending_new_segment = False  # a segment boundary was crossed since the last processed frame
     summary = {}          # track_id -> [framesVisible, totalDistancePx, maxSpeedPxPerSec]
     frames_out = []       # per-processed-frame JSON entries
@@ -159,29 +161,40 @@ def main():
             seen_ids.update(i for i, _, _ in dets)
             max_players = max(max_players, len(dets))
 
+            if pending_new_segment:
+                # segment boundary crossed since the last processed frame: reset all association state
+                # (centers teleport between views; first processed frame of a segment -> null intensity)
+                last_seen.clear()
+                pending_new_segment = False
+
             speeds = []
             for tid, x, y in dets:
                 st = summary.setdefault(tid, [0, 0.0, 0.0])
                 st[0] += 1
-                # never match track_id to a previous frame across a segment boundary (centers teleport between views)
-                if not pending_new_segment and prev_players is not None and tid in prev_players:
-                    px, py = prev_players[tid]
-                    dist = math.hypot(x - px, y - py)
-                    speed = dist / dt
-                    speeds.append(speed)
-                    st[1] += dist
-                    st[2] = max(st[2], speed)
+                # gap-tolerant association within the current segment: match track_id to its last-seen center
+                # up to MAX_GAP_FRAMES processed frames back (dt from the actual gap)
+                if tid in last_seen:
+                    lx, ly, lf = last_seen[tid]
+                    gap = (frame_index - lf) // args.step  # processed frames since last seen
+                    if 0 < gap <= MAX_GAP_FRAMES:
+                        dist = math.hypot(x - lx, y - ly)
+                        speed = dist / (gap * dt)
+                        if speed <= MAX_SPEED_PX_PER_SEC:  # drop id-recycling teleports from intensity + summary
+                            speeds.append(speed)
+                            st[1] += dist
+                            st[2] = max(st[2], speed)
+                last_seen[tid] = [x, y, frame_index]
 
-            intensity = sum(speeds) / len(speeds) if prev_players is not None and speeds else None
+            intensity = max(speeds) if speeds else None
+            mean_speed = sum(speeds) / len(speeds) if speeds else None
             frames_out.append({
                 "t": frame_index / fps,
                 "frameIndex": frame_index,
                 "playerCount": len(dets),
                 "players": [{"track_id": tid, "x": round(x, 2), "y": round(y, 2)} for tid, x, y in dets],
                 "intensity": round(intensity, 2) if intensity is not None else None,
+                "meanSpeedPxPerSec": round(mean_speed, 2) if mean_speed is not None else None,
             })
-            prev_players = {tid: (x, y) for tid, x, y in dets}
-            pending_new_segment = False
 
             line = f"{frame_index} players={len(dets)} ids={[d[0] for d in dets]}"
             print(line, flush=True)
