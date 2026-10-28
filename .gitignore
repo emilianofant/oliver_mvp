@@ -10,3 +10,4 @@ server/node_modules/
 web/node_modules/
 web/dist/
 Glossary.md
+.tasks/reports
