@@ -1,3 +1,4 @@
+[TASK 09 - DONE]
 ---
 # Task 09: Court Calibration UI (Per-Video Click-to-Fit)
 

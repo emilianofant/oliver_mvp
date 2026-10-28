@@ -1,3 +1,4 @@
+[TASK 08 - DONE]
 ---
 # Task 08: Intensity Signal Fix (Max Headline + Gap-Tolerant Association)
 

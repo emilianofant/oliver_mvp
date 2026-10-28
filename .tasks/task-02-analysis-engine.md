@@ -1,3 +1,4 @@
+[TASK 02 - DONE]
 ---
 # Task 02: Full Analysis Engine (Metrics JSON)
 

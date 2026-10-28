@@ -1,3 +1,4 @@
+[TASK 11 - DONE (13)]
 ---
 # Task 11: Rally Segmentation v2 (Players-Only Series + Retuned Hysteresis)
 

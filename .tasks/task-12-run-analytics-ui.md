@@ -1,3 +1,5 @@
+[TASK 12 - DONE]
+---
 # Task 12: In-UI Analytics Run ("Run analytics" trigger + minimal results view)
 
 ## 1. Goal

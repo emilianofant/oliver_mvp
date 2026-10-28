@@ -1,3 +1,4 @@
+[TASK 01 - DONE]
 ---
 # Task 01: YOLOv8s Detection Preview (Sandbox Gate)
 

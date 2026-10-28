@@ -1,3 +1,5 @@
+[TASK 14 - DONE]
+---
 # Task 14: Highlight Clip Padding
 
 ## 1. Goal

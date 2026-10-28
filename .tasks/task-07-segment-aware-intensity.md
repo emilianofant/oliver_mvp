@@ -1,3 +1,4 @@
+[TASK 07 - DONE]
 ---
 # Task 07: Segment-Aware Intensity & Highlight Picking (Cut-Spike Fix)
 

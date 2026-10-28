@@ -1,3 +1,5 @@
+[TASK 13 - DONE]
+---
 # Task 13: Metrics Retune v2 (Per-Frame Player Floor + Rally Thresholds)
 
 ## 1. Goal

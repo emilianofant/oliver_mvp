@@ -1,3 +1,5 @@
+[TASK 15 - DONE (PLAYER IDENTIFICATION ISSUE)]
+---
 # Task 15: Player Filter Tighten v2 (Min-Frame Floor + Trapezoid Inside-Test)
 
 ## 1. Goal

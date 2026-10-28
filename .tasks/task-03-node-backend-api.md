@@ -1,3 +1,4 @@
+[TASK 03 - DONE]
 ---
 # Task 03: Node Backend API (Upload → Analysis → Trim)
 

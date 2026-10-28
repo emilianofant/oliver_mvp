@@ -1,3 +1,4 @@
+[TASK 06 - NOT STARTED (DOCKER)]
 ---
 # Task 06: Dockerize Full Stack (reproducible public-repo run)
 

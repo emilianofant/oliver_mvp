@@ -1,3 +1,4 @@
+[TASK 04 - DONE]
 ---
 # Task 04: React Dashboard UI (Upload → Video + Intensity Chart → Highlight Generator)
 
