@@ -102,9 +102,14 @@ for uploads and `ffmpeg` for highlight trimming, with all runtime artifacts in `
 to `/app/data`. The engine auto-detects CUDA vs CPU at runtime.
 
 **Optional GPU.** To run inference on a GPU: install [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-on the host, then uncomment the `deploy.resources.reservations.devices` block for the `server`
-service in `docker-compose.yml`. With a visible CUDA device the engine uses it (FP16); without one
-it falls back to CPU automatically — no other change needed.
+on the host, then start with the GPU override file merged in:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+Without it (the default) no device is exposed and the engine runs on CPU. With a visible CUDA
+device the engine uses it (FP16); without one it falls back to CPU automatically — no other change needed.
 
 **Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips,
 everything stays local, and nothing is ever sent outside your machine. The model weights (~22 MB)

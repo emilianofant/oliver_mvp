@@ -3,14 +3,8 @@ services:
     build: .
     volumes:
       - ./data:/app/data
-    # Optional GPU passthrough (host needs nvidia-container-toolkit):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # GPU inference: merge the override file (host needs nvidia-container-toolkit):
+    #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 
   web:
     build: ./web
