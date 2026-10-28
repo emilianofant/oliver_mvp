@@ -79,3 +79,33 @@ samples/              # your test MP4s go here (gitignored)
 data/                 # runtime artifacts: --out files, saved frames (gitignored)
 .tasks/               # project task tickets
 ```
+
+## Run with Docker
+
+The whole stack runs from a single command on any machine that has only Docker installed —
+no host Python, venv, Node, or FFmpeg needed:
+
+```bash
+docker compose up --build
+# then open http://localhost:8080
+```
+
+Upload an .mp4 in the dashboard and the full flow (analysis → intensity chart → highlight
+clip) runs inside the containers. CPU works out of the box; expect the `server` image to be
+~2–3 GB because it bundles a CUDA-capable PyTorch wheel.
+
+**Architecture sketch.** Two services: `web` is an nginx container that serves the built Vite/React
+dashboard on port 80 (published as :8080) and reverse-proxies `/api/*` and `/data/*` to the `server`
+service, so all UI→API traffic stays inside the compose network. `server` runs the Node/Express API
+(`node:20-slim` + apt python3 + ffmpeg); it spawns `python3 python/analyze.py` (YOLOv8s + ByteTrack)
+for uploads and `ffmpeg` for highlight trimming, with all runtime artifacts in `./data`, bind-mounted
+to `/app/data`. The engine auto-detects CUDA vs CPU at runtime.
+
+**Optional GPU.** To run inference on a GPU: install [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+on the host, then uncomment the `deploy.resources.reservations.devices` block for the `server`
+service in `docker-compose.yml`. With a visible CUDA device the engine uses it (FP16); without one
+it falls back to CPU automatically — no other change needed.
+
+**Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips,
+everything stays local, and nothing is ever sent outside your machine. The model weights (~22 MB)
+auto-download into the server container on first analysis if not present.
