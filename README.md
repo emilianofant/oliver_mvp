@@ -2,6 +2,15 @@
 
 Padel/tennis video player-detection project.
 
+## Screenshots
+<img width="800" alt="01-ol-main" src="https://github.com/user-attachments/assets/b116b65a-b08f-4adf-80ce-73018c764967" />
+
+<img width="800" alt="02-ol-uploaded" src="https://github.com/user-attachments/assets/83acee5b-5072-44ae-bfde-86b8479b0958" />
+
+<img width="800" alt="03-ol-court" src="https://github.com/user-attachments/assets/bdf75278-cf80-43c2-9f57-19454924598c" />
+
+_18 players in court... niceee_ 😬
+
 ## Setup (one-time)
 
 ```bash
