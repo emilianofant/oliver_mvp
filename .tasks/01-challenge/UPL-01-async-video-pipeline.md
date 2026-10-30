@@ -1,4 +1,4 @@
-# UPL-01: Async Video Analysis Pipeline (BullMQ + Redis + MySQL Mirror)
+# UPL-01: Async Video Analysis Pipeline (BullMQ + Redis + MySQL Mirror) — DONE
 
 ## 1. Goal
 Replace the blocking `POST /api/upload` with a non-blocking pipeline: upload responds **202 `{jobId}`** as soon as the file is safely on disk; a BullMQ worker (Redis-backed) runs the existing `analyze.py` CLI unchanged with env-configurable concurrency; job state is mirrored into MySQL so all API reads go through the relational store and survive server restarts.
@@ -34,12 +34,12 @@ Works on branch `challenge/from-mvp-to-service` (small conventional commits). **
 - `web/src/App.jsx` untouched here (**UPL-03** owns the frontend); until then the old dashboard's upload button 404s — expected, note it in the commit message.
 
 ## 4. Acceptance Criteria
-- [ ] `docker compose up --build` from clean state: mysql + redis healthy, server boots (migrations auto-applied), all routes answer.
-- [ ] **Non-blocking proof:** upload a small mp4 → 202 with `{jobId}` arrives while analysis is still running — immediately after the 202, `GET /api/jobs/<id>` shows `queued` or `processing`, never already `done`.
-- [ ] Lifecycle: job walks queued → processing → done; on done, `videos.duration_s` filled from engine meta (visible via `GET /api/videos`).
-- [ ] Failure path: non-video file renamed `.mp4` → job ends `failed`; `error` contains a readable stderr tail ≤ 2 KB.
-- [ ] Concurrency: with `ANALYZE_CONCURRENCY=2`, two uploads show overlapping `[started_at, finished_at]`; default serializes (second starts ≥ first finishes) — verify via API timestamps.
-- [ ] Old `/api/upload` gone; no dead references in server code.
+- [x] `docker compose up --build` from clean state: mysql + redis healthy, server boots (migrations auto-applied), all routes answer.
+- [x] **Non-blocking proof:** upload a small mp4 → 202 with `{jobId}` arrives while analysis is still running — immediately after the 202, `GET /api/jobs/<id>` shows `queued` or `processing`, never already `done`.
+- [x] Lifecycle: job walks queued → processing → done; on done, `videos.duration_s` filled from engine meta (visible via `GET /api/videos`).
+- [x] Failure path: non-video file renamed `.mp4` → job ends `failed`; `error` contains a readable stderr tail ≤ 2 KB.
+- [x] Concurrency: with `ANALYZE_CONCURRENCY=2`, two uploads show overlapping `[started_at, finished_at]`; default serializes (second starts ≥ first finishes) — verify via API timestamps.
+- [x] Old `/api/upload` gone; no dead references in server code.
 
 ## 5. HUMAN GATE (owner runs personally before this ticket is closed)
 1. `docker compose up --build` → both new services healthy, dashboard backend answers on :8080.
