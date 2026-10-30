@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const multer = require("multer");
+const { query, runMigrations } = require("./lib/db");
+const { enqueueAnalyze, startWorker } = require("./lib/analyzeQueue");
 
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
@@ -56,28 +58,59 @@ const upload = multer({
   },
 });
 
-app.post("/api/upload", upload.single("video"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "missing 'video' file field" });
+// Upload stays synchronous (byte transfer); only analysis is queued.
+app.post("/api/videos", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "missing 'file' file field" });
   const id = path.parse(req.file.filename).name;
-  console.log(`[upload] received ${req.file.originalname} (${req.file.size} bytes), saved as uploads/${req.file.filename}`);
-  const outFile = `data/analysis/${id}.json`;
-  runCmd(
-    "analyze",
-    process.env.PYTHON_BIN || path.join(ROOT, ".venv", "bin", "python"),
-    ["python/analyze.py", "--input", req.file.path, "--output", outFile],
-    (err, stderrTail) => {
-      if (err) return res.status(500).json({ error: `analysis failed (${err.message}): ${stderrTail}` });
-      let analysis;
-      try {
-        analysis = JSON.parse(fs.readFileSync(path.join(ROOT, outFile), "utf8"));
-      } catch (_e) {
-        console.error(`[upload] could not read analysis output: ${outFile}`);
-        return res.status(500).json({ error: `could not read analysis output: ${outFile}` });
-      }
-      console.log(`[upload] done id=${id} frames=${analysis.frames.length} segments=${analysis.segments.length}`);
-      res.json({ status: "ok", id, videoUrl: `/data/uploads/${req.file.filename}` });
-    },
-  );
+  try {
+    // Strict order: file on disk before DB rows, DB rows before enqueue.
+    await query("INSERT INTO videos (id, filename, size_bytes) VALUES (?, ?, ?)", [id, req.file.originalname, req.file.size]);
+    await query("INSERT INTO jobs (id, video_id, status) VALUES (?, ?, 'queued')", [id, id]);
+    await enqueueAnalyze(id);
+  } catch (err) {
+    console.error(`[videos] failed for ${req.file.path}: ${err.message}`);
+    return res.status(500).json({ error: `failed to register upload: ${err.message}` });
+  }
+  console.log(`[videos] queued id=${id} original=${req.file.originalname} (${req.file.size} bytes)`);
+  res.status(202).json({ jobId: id });
+});
+
+function jobToJson(r) {
+  return { jobId: r.id, status: r.status, error: r.error, attempts: r.attempts, createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at };
+}
+
+app.get("/api/jobs/:id", async (req, res) => {
+  try {
+    const rows = await query("SELECT * FROM jobs WHERE id = ?", [req.params.id]);
+    if (rows.length === 0) return res.status(404).json({ error: `unknown job ${req.params.id}` });
+    res.json(jobToJson(rows[0]));
+  } catch (err) {
+    console.error(`[jobs] GET /api/jobs/${req.params.id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/videos", async (_req, res) => {
+  try {
+    const rows = await query(
+      `SELECT v.id, v.filename, v.size_bytes, v.duration_s, v.created_at,
+              j.status, j.error, j.attempts, j.started_at, j.finished_at
+       FROM videos v LEFT JOIN jobs j ON j.video_id = v.id
+       ORDER BY v.created_at DESC`,
+    );
+    res.json(rows.map((r) => ({
+      id: r.id,
+      filename: r.filename,
+      sizeBytes: Number(r.size_bytes),
+      durationSec: r.duration_s,
+      createdAt: r.created_at,
+      videoUrl: `/data/uploads/${r.id}.mp4`,
+      job: r.status ? { status: r.status, error: r.error, attempts: r.attempts, startedAt: r.started_at, finishedAt: r.finished_at } : null,
+    })));
+  } catch (err) {
+    console.error(`[videos] GET /api/videos: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post("/api/analytics", (req, res) => {
@@ -197,4 +230,13 @@ app.use((err, _req, res, _next) => {
   if (!res.headersSent) res.status(status).json({ error: err.message });
 });
 
-app.listen(3001, () => console.log("listening on http://localhost:3001"));
+// Boot: apply pending migrations (idempotent), start the analysis worker, then listen.
+runMigrations()
+  .then(() => {
+    startWorker();
+    app.listen(3001, () => console.log("listening on http://localhost:3001"));
+  })
+  .catch((err) => {
+    console.error(`[db] migrations failed at boot: ${err.message}`);
+    process.exit(1);
+  });
