@@ -1,10 +1,47 @@
 services:
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: oliver_root_password
+      MYSQL_DATABASE: oliver
+      # Dev-grade credentials; production secret management is out of scope.
+      MYSQL_USER: oliver
+      MYSQL_PASSWORD: oliver_dev_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uoliver", "-poliver_dev_password"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    # AOF persistence so queued/running jobs survive container restarts.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
   server:
     build: .
+    environment:
+      DATABASE_URL: "mysql://oliver:oliver_dev_password@db:3306/oliver"
+      REDIS_URL: redis://redis:6379
+      ANALYZE_CONCURRENCY: ${ANALYZE_CONCURRENCY:-1}
     volumes:
       - ./data:/app/data
     # GPU inference: merge the override file (host needs nvidia-container-toolkit):
     #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   web:
     build: ./web
@@ -12,3 +49,7 @@ services:
       - "8080:80"
     depends_on:
       - server
+
+volumes:
+  mysql-data:
+  redis-data:
