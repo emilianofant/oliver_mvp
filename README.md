@@ -93,8 +93,9 @@ docker compose up --build
 Upload an .mp4 in the dashboard and the full flow (analysis → intensity chart → highlight
 clip) runs inside the containers. CPU works out of the box; expect the `server` image to be
 ~2–3 GB because it bundles a CUDA-capable PyTorch wheel.
-On CPU, analysis takes roughly real-time or longer and uploads block until it completes;
-a large clip may take several minutes.
+On CPU, analysis takes roughly real-time or longer; the upload returns immediately with a job ID
+(`POST /api/videos` → 202) and a background worker runs the analysis — poll `GET /api/jobs/<id>`
+or `GET /api/videos` for status. A large clip may take several minutes.
 
 **Architecture sketch.** Two services: `web` is an nginx container that serves the built Vite/React
 dashboard on port 80 (published as :8080) and reverse-proxies `/api/*` and `/data/*` to the `server`

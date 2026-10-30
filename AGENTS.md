@@ -16,14 +16,19 @@ dashboard shows the intensity chart, detected rallies, court calibration UI, and
 python/analyze.py          # inference engine: YOLOv8s + ByteTrack -> analysis.json (meta/segments/frames/playerSummary)
 python/metrics.py          # stdlib-only post-hoc analytics: analysis.json + court config -> derived JSON
 python/court-defaults.json # default frame size, static wide-shot court rect (fractions), all tunable thresholds
-server/server.js           # Express API :3001 — spawns analyze/metrics/ffmpeg; serves /data statically
+server/server.js           # Express API :3001 — /api/videos upload+list, /api/jobs/:id; spawns metrics/ffmpeg; serves /data statically
+server/lib/analyzeQueue.js # BullMQ producer + worker: spawns analyze.py (concurrency via ANALYZE_CONCURRENCY), mirrors job state to MySQL
+server/lib/db.js           # mysql2 pool from DATABASE_URL + runMigrations() (auto-applied at boot); npm run migrate
+server/migrations/         # ordered .sql migrations, tracked in schema_migrations
 web/src/App.jsx            # single-file React dashboard (Vite + Recharts)
 data/{uploads,clips,analysis,court}/   # gitignored runtime state only
 ```
 
-Flow: `POST /api/upload` → `analyze.py` writes `data/analysis/<id>.json` → user calibrates the court
+Flow: `POST /api/videos` saves the upload and returns 202 `{jobId}` immediately; a BullMQ worker
+(Redis, AOF-persisted) runs `analyze.py` → `data/analysis/<id>.json`, mirroring job state into MySQL
+(`videos` + `jobs` tables — source of truth for all API reads). User calibrates the court
 (`/api/court`, per-clip override in `data/court/<id>.json`) → `POST /api/analytics` → `metrics.py`
-writes `data/analysis/<id>-derived.json`.
+writes `data/analysis/<id>-derived.json`. One UUID everywhere: `videos.id` = `jobs.id` = BullMQ jobId.
 
 ## 3. How to run
 
