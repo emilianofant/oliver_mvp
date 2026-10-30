@@ -33,6 +33,8 @@ services:
       DATABASE_URL: "mysql://oliver:oliver_dev_password@db:3306/oliver"
       REDIS_URL: redis://redis:6379
       ANALYZE_CONCURRENCY: ${ANALYZE_CONCURRENCY:-1}
+      # Retry cap for failed analyze jobs (exponential backoff, 5 s base); default unset → 3.
+      ANALYZE_MAX_ATTEMPTS: ${ANALYZE_MAX_ATTEMPTS:-3}
     volumes:
       - ./data:/app/data
     # GPU inference: merge the override file (host needs nvidia-container-toolkit):

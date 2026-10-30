@@ -17,7 +17,7 @@ python/analyze.py          # inference engine: YOLOv8s + ByteTrack -> analysis.j
 python/metrics.py          # stdlib-only post-hoc analytics: analysis.json + court config -> derived JSON
 python/court-defaults.json # default frame size, static wide-shot court rect (fractions), all tunable thresholds
 server/server.js           # Express API :3001 — /api/videos upload+list, /api/jobs/:id; spawns metrics/ffmpeg; serves /data statically
-server/lib/analyzeQueue.js # BullMQ producer + worker: spawns analyze.py (concurrency via ANALYZE_CONCURRENCY), mirrors job state to MySQL
+server/lib/analyzeQueue.js # BullMQ producer + worker: spawns analyze.py (concurrency via ANALYZE_CONCURRENCY; bounded retries via ANALYZE_MAX_ATTEMPTS, exponential backoff 5 s base), mirrors job state to MySQL
 server/lib/db.js           # mysql2 pool from DATABASE_URL + runMigrations() (auto-applied at boot); npm run migrate
 server/migrations/         # ordered .sql migrations, tracked in schema_migrations
 web/src/App.jsx            # single-file React dashboard (Vite + Recharts)

@@ -17,8 +17,13 @@ function getQueue() {
 
 // Producer: enqueue analysis for a video whose DB rows already exist.
 async function enqueueAnalyze(videoId) {
-  // attempts=1: single-attempt semantics (terminal failed). Retry cap/backoff is UPL-02.
-  await getQueue().add("analyze", { videoId }, { jobId: videoId, attempts: 1 });
+  // Bounded retries with exponential backoff (5 s base): terminal failed only after the last attempt.
+  const maxAttempts = Math.max(1, Number(process.env.ANALYZE_MAX_ATTEMPTS ?? 3));
+  await getQueue().add("analyze", { videoId }, {
+    jobId: videoId,
+    attempts: maxAttempts,
+    backoff: { type: "exponential", delay: 5000 },
+  });
 }
 
 function redisOptions() {
@@ -77,11 +82,20 @@ async function onCompleted(job) {
   await query("UPDATE videos SET duration_s=? WHERE id=?", [durationSec, videoId]);
 }
 
-// Single-attempt: a failed job is terminal here. UPL-02 adds the retry cap/backoff in this handler.
+// Non-final failure (retries remain): back to 'queued' with the last error tail prefixed by the
+// failed attempt — the mirror keeps its four states, never inventing a fifth. Terminal only on the last.
 async function onFailed(job, err) {
+  const videoId = job.data.videoId;
   const message = tail(err ? String(err.message || err) : "unknown error", ERROR_TAIL_MAX_BYTES);
-  console.error(`[analyze] job ${job.data.videoId} failed: ${message}`);
-  await query("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?", [message, nowSql(), job.data.videoId]);
+  const attemptsMade = Number.isFinite(job.attemptsMade) ? job.attemptsMade : 1;
+  const maxAttempts = Math.max(1, Number(job.opts && job.opts.attempts) || 1);
+  if (attemptsMade < maxAttempts) {
+    console.error(`[analyze] job ${videoId} attempt ${attemptsMade}/${maxAttempts} failed; retry scheduled`);
+    await query("UPDATE jobs SET status='queued', error=? WHERE id=?", [`attempt ${attemptsMade}/${maxAttempts} failed: ${message}`, videoId]);
+    return;
+  }
+  console.error(`[analyze] job ${videoId} failed after ${attemptsMade} attempt(s): ${message}`);
+  await query("UPDATE jobs SET status='failed', error=?, finished_at=? WHERE id=?", [message, nowSql(), videoId]);
 }
 
 function startWorker() {
@@ -89,7 +103,8 @@ function startWorker() {
   console.log(`[analyze] worker starting (concurrency=${concurrency})`);
   const worker = new Worker(QUEUE_NAME, processor, { connection: redisOptions(), concurrency });
 
-  // Rows are inserted as 'queued' in server.js; the BullMQ Worker emits no waiting/delayed event.
+  // Rows are inserted as 'queued' in server.js (and back to 'queued' between retries in onFailed);
+  // the BullMQ Worker emits no waiting/delayed event.
   // Mirror handlers must never take the process down (DB hiccups during a restart window).
   worker.on("active", (job) => onActive(job).catch((err) => console.error(`[analyze] onActive mirror failed: ${err.message}`)));
   worker.on("completed", (job) => onCompleted(job).catch((err) => console.error(`[analyze] onCompleted mirror failed: ${err.message}`)));
