@@ -1,4 +1,4 @@
-# UPL-02: Retry Cap with Exponential Backoff (Bonus)
+# UPL-02: Retry Cap with Exponential Backoff (Bonus) — DONE
 
 ## 1. Goal
 Turn the analyze job from single-attempt into a bounded-retry job: failures requeue automatically up to an env-configurable cap with exponential backoff, terminal `failed` only after the last attempt. This is the challenge's optional "reintentos con límite" bonus — small by construction (UPL-01 shaped the event handlers for exactly this diff).
@@ -21,10 +21,10 @@ Depends on **UPL-01**. Same branch (`challenge/from-mvp-to-service`), own small 
 - No changes to worker concurrency logic, endpoints, or frontend.
 
 ## 4. Acceptance Criteria
-- [ ] Broken `.mp4` with defaults: attempts climb 1 → 2 → 3 (visible via `GET /api/jobs/:id` between retries), gaps between attempts visibly grow (~5 s then ~10 s), terminal `failed` after attempt 3 with the last error tail intact.
-- [ ] Between retries, status reads `queued` with `attempts ≥ 2` and a non-empty `error` naming the failed attempt — never `failed`, never stuck in `processing`.
-- [ ] `ANALYZE_MAX_ATTEMPTS=1` reproduces UPL-01 behavior exactly (immediate terminal failure).
-- [ ] A healthy upload still goes queued → processing → done with `attempts = 1` and zero retries.
+- [x] Broken `.mp4` with defaults: attempts climb 1 → 2 → 3 (visible via `GET /api/jobs/:id` between retries), gaps between attempts visibly grow (~5 s then ~10 s), terminal `failed` after attempt 3 with the last error tail intact.
+- [x] Between retries, status reads `queued` with `attempts ≥ 2` and a non-empty `error` naming the failed attempt — never `failed`, never stuck in `processing`.
+- [x] `ANALYZE_MAX_ATTEMPTS=1` reproduces UPL-01 behavior exactly (immediate terminal failure).
+- [x] A healthy upload still goes queued → processing → done with `attempts = 1` and zero retries.
 
 ## 5. HUMAN GATE (owner runs personally before this ticket is closed)
 1. Upload a broken `.mp4`; poll the job every few seconds: watch it bounce failed→queued→processing across three attempts with growing pauses, ending `failed`.
