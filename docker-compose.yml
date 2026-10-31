@@ -1,6 +1,8 @@
 services:
   db:
     image: mysql:8
+    ports:
+      - "3306:3306"   # dev convenience; remove for non-local setups
     environment:
       MYSQL_ROOT_PASSWORD: oliver_root_password
       MYSQL_DATABASE: oliver
