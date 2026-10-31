@@ -101,8 +101,12 @@ or `GET /api/videos` for status. A large clip may take several minutes.
 dashboard on port 80 (published as :8080) and reverse-proxies `/api/*` and `/data/*` to the `server`
 service, so all UI→API traffic stays inside the compose network. `server` runs the Node/Express API
 (`node:20-slim` + apt python3 + ffmpeg); it spawns `python3 python/analyze.py` (YOLOv8s + ByteTrack)
-for uploads and `ffmpeg` for highlight trimming, with all runtime artifacts in `./data`, bind-mounted
-to `/app/data`. The engine auto-detects CUDA vs CPU at runtime.
+for uploads and `ffmpeg` for highlight trimming, with all runtime artifacts in a named Docker volume
+mounted at `/app/data` (inspect via `docker cp oliver_video-data:/app/data .`).
+The engine auto-detects CUDA vs CPU at runtime.
+
+**Fresh start.** To wipe everything (DB, queue, uploads/analysis) and rebuild from scratch:
+`docker compose down -v && docker compose up --build`. Migrations re-apply automatically at boot.
 
 **Optional GPU.** To run inference on a GPU: install [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 on the host, then start with the GPU override file merged in:

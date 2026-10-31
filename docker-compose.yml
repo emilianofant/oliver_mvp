@@ -37,8 +37,10 @@ services:
       ANALYZE_CONCURRENCY: ${ANALYZE_CONCURRENCY:-1}
       # Retry cap for failed analyze jobs (exponential backoff, 5 s base); default unset → 3.
       ANALYZE_MAX_ATTEMPTS: ${ANALYZE_MAX_ATTEMPTS:-3}
+    # Named volume (not a host bind mount) so `docker compose down -v` gives a full fresh start.
+    # Inspect with: docker cp oliver_video-data:/app/data .
     volumes:
-      - ./data:/app/data
+      - data:/app/data
     # GPU inference: merge the override file (host needs nvidia-container-toolkit):
     #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
     depends_on:
@@ -57,3 +59,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  data:
