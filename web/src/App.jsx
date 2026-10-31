@@ -57,13 +57,13 @@ function findStrongestSpike(frames, segments) {
   return bestStart == null ? null : [bestStart, bestStart + SPIKE_WINDOW_SECONDS];
 }
 
-function UploadZone({ onFile, uploading }) {
+function UploadZone({ onFiles, uploading }) {
   const inputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
 
-  function pick(file) {
-    if (!file || uploading) return;
-    onFile(file);
+  function pick(files) {
+    if (!files || !files.length || uploading) return;
+    onFiles(Array.from(files));
   }
 
   return (
@@ -80,7 +80,7 @@ function UploadZone({ onFile, uploading }) {
       onDrop={(e) => {
         e.preventDefault();
         setDragOver(false);
-        pick(e.dataTransfer.files && e.dataTransfer.files[0]);
+        pick(e.dataTransfer.files);
       }}
       className={`flex cursor-pointer items-center justify-center gap-3 rounded-lg border-2 border-dashed p-6 text-center ${
         dragOver ? "border-blue-500 bg-blue-50" : "border-gray-300"
@@ -89,18 +89,19 @@ function UploadZone({ onFile, uploading }) {
       {uploading ? (
         <>
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
-          <span>Processing video…</span>
+          <span>Uploading…</span>
         </>
       ) : (
-        <span>Drag &amp; drop an .mp4 here, or click to browse</span>
+        <span>Drag &amp; drop .mp4 files here, or click to browse (multiple allowed)</span>
       )}
       <input
         ref={inputRef}
         type="file"
+        multiple
         accept=".mp4,video/mp4"
         className="hidden"
         onChange={(e) => {
-          pick(e.target.files && e.target.files[0]);
+          pick(e.target.files);
           e.target.value = "";
         }}
       />
@@ -260,6 +261,83 @@ function ClipResult({ clipUrl }) {
         Download clip
       </a>
     </div>
+  );
+}
+
+function formatBytes(n) {
+  if (typeof n !== "number" || !Number.isFinite(n)) return "–";
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} B`;
+}
+
+function StatusChip({ job }) {
+  const status = job ? job.status : "unknown";
+  if (status === "done") return <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">done</span>;
+  if (status === "failed") {
+    return (
+      <span title={job.error || ""} className="inline-flex items-center gap-2 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+        failed
+        {job.error && <span className="max-w-[24rem] truncate">{job.error}</span>}
+      </span>
+    );
+  }
+  if (status === "processing") {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800">
+        <div className="h-3 w-3 animate-spin rounded-full border border-blue-300 border-t-blue-600" />
+        processing
+      </span>
+    );
+  }
+  if (status === "queued") return <span className="rounded-full bg-gray-200 px-2 py-0.5 text-xs font-medium text-gray-700">queued</span>;
+  return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">{status}</span>;
+}
+
+function VideosTable({ videos, uploading, onOpen }) {
+  if (!videos.length) {
+    return (
+      <div className="flex h-32 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
+        No videos yet — upload a clip above to get started.
+      </div>
+    );
+  }
+  return (
+    <table className="w-full border-collapse text-sm">
+      <thead>
+        <tr className="border-b border-gray-200 text-left text-xs uppercase tracking-wide text-gray-500">
+          <th className="py-2 pr-3 font-medium">File</th>
+          <th className="py-2 pr-3 font-medium">Size</th>
+          <th className="py-2 pr-3 font-medium">Date</th>
+          <th className="py-2 pr-3 font-medium">Duration</th>
+          <th className="py-2 pr-3 font-medium">Status</th>
+          <th className="py-2 text-right font-medium"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {videos.map((v) => (
+          <tr key={v.id} className="border-b border-gray-100">
+            <td className="max-w-[16rem] truncate py-2 pr-3" title={v.filename}>{v.filename}</td>
+            <td className="py-2 pr-3 text-gray-500">{formatBytes(v.sizeBytes)}</td>
+            <td className="py-2 pr-3 text-gray-500">{new Date(v.createdAt).toLocaleString()}</td>
+            <td className="py-2 pr-3 font-mono">{v.durationSec != null ? formatTime(v.durationSec) : "–"}</td>
+            <td className="py-2 pr-3">
+              <StatusChip job={v.job} />
+            </td>
+            <td className="py-2 text-right">
+              <button
+                type="button"
+                onClick={() => onOpen(v.id)}
+                disabled={!v.job || v.job.status !== "done" || uploading}
+                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+              >
+                Open
+              </button>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -452,6 +530,8 @@ function CourtControls({ videoRef, videoUrl, court, netY, leftTilt, rightTilt, o
 
 export default function App() {
   const videoRef = useRef(null);
+  const [view, setView] = useState("landing");
+  const [videos, setVideos] = useState([]);
   const [videoUrl, setVideoUrl] = useState(null);
   const [frames, setFrames] = useState([]);
   const [segments, setSegments] = useState([]);
@@ -489,38 +569,64 @@ export default function App() {
     return () => { cancelled = true; };
   }, [videoUrl]);
 
-  async function handleFile(file) {
-    if (!/\.mp4$/i.test(file.name)) {
-      setUploadError("Only .mp4 files are accepted");
-      return;
+  async function fetchVideos() {
+    try {
+      const resp = await fetch("/api/videos");
+      if (!resp.ok) throw new Error(`failed to load videos (${resp.status})`);
+      setVideos(await resp.json());
+    } catch (err) {
+      setUploadError(err.message);
     }
+  }
+
+  const anyActive = videos.some((v) => v.job && (v.job.status === "queued" || v.job.status === "processing"));
+
+  // Poll server truth while any job is in flight; stop once all settle.
+  useEffect(() => {
+    if (view !== "landing") return undefined;
+    fetchVideos();
+    if (!anyActive) return undefined;
+    const id = setInterval(fetchVideos, 2500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, anyActive]);
+
+  async function handleFiles(files) {
     setUploading(true);
     setUploadError("");
-    const form = new FormData();
-    form.append("video", file);
     try {
-      const resp = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(data.error || `upload failed (${resp.status})`);
-      let analysis = data.analysis;
-      if (!analysis && data.id) {
-        // upload response may omit the inlined analysis; fetch it from the static /data mount.
-        const aResp = await fetch(`/data/analysis/${data.id}.json`);
-        if (!aResp.ok) throw new Error(`could not load analysis (${aResp.status})`);
-        analysis = await aResp.json();
+      for (const file of files) {
+        if (!/\.mp4$/i.test(file.name)) throw new Error(`Only .mp4 files are accepted (${file.name})`);
+        const form = new FormData();
+        form.append("file", file);
+        const resp = await fetch("/api/videos", { method: "POST", body: form });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.error || `upload failed (${resp.status})`);
       }
-      setVideoUrl(data.videoUrl);
-      setFrames(analysis && Array.isArray(analysis.frames) ? analysis.frames : []);
-      setSegments(analysis && Array.isArray(analysis.segments) ? analysis.segments : []);
+    } catch (err) {
+      setUploadError(err.message);
+    } finally {
+      setUploading(false);
+      fetchVideos();
+    }
+  }
+
+  async function openVideo(id) {
+    try {
+      const resp = await fetch(`/data/analysis/${id}.json`);
+      if (!resp.ok) throw new Error(`could not load analysis (${resp.status})`);
+      const analysis = await resp.json();
+      setFrames(Array.isArray(analysis.frames) ? analysis.frames : []);
+      setSegments(Array.isArray(analysis.segments) ? analysis.segments : []);
+      setVideoUrl(`/data/uploads/${id}.mp4`);
       setStartStr("");
       setEndStr("");
       setClipUrl(null);
       setDerived(null);
       setAnalyticsError("");
+      setView("video");
     } catch (err) {
-      setUploadError(err.message);
-    } finally {
-      setUploading(false);
+      alert(err.message);
     }
   }
 
@@ -583,14 +689,37 @@ export default function App() {
     }
   }
 
+  if (view === "landing") {
+    return (
+      <div className="min-h-screen bg-gray-100 p-6 text-gray-900">
+        <h1 className="mb-4 text-xl font-semibold">Oliver Video Dashboard</h1>
+        <section className="space-y-4 rounded-lg bg-white p-4 shadow">
+          <UploadZone onFiles={handleFiles} uploading={uploading} />
+          {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
+          <VideosTable videos={videos} uploading={uploading} onOpen={openVideo} />
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-100 p-6 text-gray-900">
-      <h1 className="mb-4 text-xl font-semibold">Oliver Video Dashboard</h1>
+      <div className="mb-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setView("landing");
+            fetchVideos();
+          }}
+          className="rounded bg-gray-700 px-3 py-1 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          ← All videos
+        </button>
+        <h1 className="text-xl font-semibold">Oliver Video Dashboard</h1>
+      </div>
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="space-y-4 rounded-lg bg-white p-4 shadow">
-          <UploadZone onFile={handleFile} uploading={uploading} />
-          {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
-          {videoUrl ? (
+          {videoUrl && (
             <div className="relative">
               <video ref={videoRef} src={videoUrl} controls className="w-full rounded" />
               <CourtOverlay
@@ -601,10 +730,6 @@ export default function App() {
                 onChange={(key, value) => setCourt((c) => ({ ...c, [key]: Math.min(1, Math.max(0, value)) }))}
                 onNetYChange={(v) => setNetY(Math.min(1, Math.max(0, v)))}
               />
-            </div>
-          ) : (
-            <div className="flex h-48 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
-              No video yet — upload a clip to get started.
             </div>
           )}
         </section>
