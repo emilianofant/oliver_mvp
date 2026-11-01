@@ -14,7 +14,7 @@ is recorded as a possible future add-on, not part of the MVP.
 | Archetype | Duration | Rally count / density | Notes |
 |---|---|---|---|
 | `clip` | uniform 30–180 s | 1–6 rallies (≈4/min — anchored by the real validated sample: 3 rallies in 46 s) | short highlights/extracts |
-| `resumen` | uniform 300–1200 s | point cycle uniform 18–25 s ⇒ ≈2.4–3.3 rallies/min (tighter cuts than a full match; **not** more — density is physically capped by rally duration) | condensed session summary |
+| `summary` | uniform 300–1800 s (5–30 min) | point cycle uniform 18–25 s ⇒ ≈2.4–3.3 rallies/min (tighter cuts than a full match; **not** more — density is physically capped by rally duration) | condensed session summary |
 | `match` | uniform 5400–7200 s (90–120 min) | count = clamp(round(N(μ=122, σ=15)), 80, 165) | full padel match; **owner-verified reference: avg ~122 points/match** from the consulted stats page |
 
 ## 2. Per-rally parameters (all archetypes)
@@ -48,13 +48,13 @@ analytics output share one shape.
 (§6, primary source). Even at the required scale of 200 videos that is only ≈24k rally rows;
 the ≥500k target comes from per-second intensity samples instead. Rallies stay realistic, not padded:
 
-- **Videos:** ≥200; mix ≈75 % `match` / 15 % `clip` / 10 % `resumen`.
-- **Expected row counts** (formulas + worked example at exactly 200 videos = 150 match / 30 clip / 20 resumen; duration means: match (5400+7200)/2 = 6300 s, clip (30+180)/2 = 105 s, resumen (300+1200)/2 = 750 s):
+- **Videos:** ≥200; mix ≈75 % `match` / 15 % `clip` / 10 % `summary`.
+- **Expected row counts** (formulas + worked example at exactly 200 videos = 150 match / 30 clip / 20 summary; duration means: match (5400+7200)/2 = 6300 s, clip (30+180)/2 = 105 s, summary (300+1800)/2 = 1050 s):
 
 | Table | Formula | Worked example |
 |---|---|---|
-| `intensity_samples` | Σ videos × E[duration] ≈ n_match·6300 + n_clip·105 + n_resumen·750 | 150×6300 + 30×105 + 20×750 = 945,000 + 3,150 + 15,000 ≈ **~960k** |
-| `rallies` | (n_match − 3)·E[count≈122] + n_clip·E[Uniform{1..6}] + n_resumen·(750/21.5) | 147×122 ≈ 17,934 + 30×3.5 = 105 + 20×(750/21.5) ≈ 698 → **total ≈ ~19k** |
+| `intensity_samples` | Σ videos × E[duration] ≈ n_match·6300 + n_clip·105 + n_summary·1050 | 150×6300 + 30×105 + 20×1050 = 945,000 + 3,150 + 21,000 ≈ **~970k** |
+| `rallies` | (n_match − 3)·E[count≈122] + n_clip·E[Uniform{1..6}] + n_summary·(1050/21.5) | 147×122 ≈ 17,934 + 30×3.5 = 105 + 20×(1050/21.5) ≈ 977 → **total ≈ ~19k** |
 
 ~19k rallies is stated explicitly as a **domain-coherence decision**: the count follows from the
 cited ~122 points/match source, not from a row-count target. The seed script must still print actual
