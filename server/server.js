@@ -4,7 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const multer = require("multer");
-const { query, runMigrations } = require("./lib/db");
+const { getPool, query, runMigrations } = require("./lib/db");
 const { enqueueAnalyze, startWorker } = require("./lib/analyzeQueue");
 
 const ROOT = path.join(__dirname, "..");
@@ -41,6 +41,53 @@ function runCmd(label, bin, args, onDone) {
   });
 }
 
+// REP-03: chunked multi-row inserts so derived-data mirroring stays correct as data grows.
+const INSERT_CHUNK_ROWS = 5000;
+
+async function insertRows(conn, table, columns, rows) {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK_ROWS) {
+    const slice = rows.slice(i, i + INSERT_CHUNK_ROWS);
+    const placeholders = Array.from({ length: slice.length }, () => `(${columns.map(() => "?").join(",")})`).join(",");
+    const params = [];
+    for (const row of slice) params.push(...row);
+    await conn.query(`INSERT INTO ${table} (${columns.join(", ")}) VALUES ${placeholders}`, params);
+  }
+}
+
+// REP-03: per-video transaction — replace rallies + intensity_samples from derived.json (values copied verbatim),
+// then invalidate that video's cached reports. Idempotent: re-running yields identical row sets.
+async function mirrorDerivedToDb(videoId, derived) {
+  if (!Array.isArray(derived.rallies)) throw new Error("derived.json missing 'rallies' array");
+  if (!Array.isArray(derived.timeSeries1s)) throw new Error("derived.json missing 'timeSeries1s' array");
+  const rallyRows = [];
+  for (const r of derived.rallies) {
+    const row = [videoId, r.startT, r.endT, r.durationSec, r.peakIntensityPxPerSec];
+    if (!row.slice(1).every((v) => Number.isFinite(v))) throw new Error(`invalid rally entry: ${JSON.stringify(r)}`);
+    rallyRows.push(row);
+  }
+  const sampleRows = [];
+  for (const p of derived.timeSeries1s) {
+    if (!Number.isInteger(p.t)) throw new Error(`invalid timeSeries1s t: ${JSON.stringify(p)}`);
+    if (!(p.intensity === null || Number.isFinite(p.intensity))) throw new Error(`invalid timeSeries1s intensity: ${JSON.stringify(p)}`);
+    sampleRows.push([videoId, p.t, p.intensity]);
+  }
+  const conn = await getPool().getConnection();
+  try {
+    await conn.beginTransaction();
+    await conn.query("DELETE FROM rallies WHERE video_id = ?", [videoId]);
+    await conn.query("DELETE FROM intensity_samples WHERE video_id = ?", [videoId]);
+    await insertRows(conn, "rallies", ["video_id", "start_s", "end_s", "duration_s", "peak_intensity"], rallyRows);
+    await insertRows(conn, "intensity_samples", ["video_id", "t_s", "intensity"], sampleRows);
+    await conn.query("DELETE FROM reports WHERE video_id = ?", [videoId]);
+    await conn.commit();
+  } catch (err) {
+    try { await conn.rollback(); } catch (_rollbackErr) {}
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
 const app = express();
 app.use(express.json());
 app.use("/data", express.static(DATA_DIR));
@@ -56,6 +103,64 @@ const upload = multer({
     }
     cb(null, true);
   },
+});
+
+// REP-03: queryable rally rows with filters/sort/pagination. DB is source of truth for this endpoint.
+const RALLY_ORDER_BY = { intensity: "peak_intensity", duration: "duration_s", start: "start_s" };
+
+app.get("/api/rallies", async (req, res) => {
+  const q = req.query;
+  const where = [];
+  const params = [];
+  if (q.video_id !== undefined) {
+    if (typeof q.video_id !== "string" || q.video_id === "") return res.status(400).json({ error: "video_id must be a non-empty string" });
+    where.push("r.video_id = ?");
+    params.push(q.video_id);
+  }
+  for (const [key, op] of [["date_from", ">="], ["date_to", "<="]]) {
+    if (q[key] === undefined) continue;
+    const d = new Date(q[key]);
+    if (Number.isNaN(d.getTime())) return res.status(400).json({ error: `${key} must be an ISO date` });
+    where.push(`v.created_at ${op} ?`);
+    params.push(d);
+  }
+  if (q.min_duration_s !== undefined) {
+    const v = Number(q.min_duration_s);
+    if (!Number.isFinite(v) || v < 0) return res.status(400).json({ error: "min_duration_s must be a number >= 0" });
+    where.push("r.duration_s >= ?");
+    params.push(v);
+  }
+  const orderBy = q.order_by === undefined ? "start" : q.order_by;
+  if (!Object.prototype.hasOwnProperty.call(RALLY_ORDER_BY, orderBy)) {
+    return res.status(400).json({ error: "order_by must be one of intensity|duration|start" });
+  }
+  const order = q.order === undefined ? (orderBy === "start" ? "asc" : "desc") : q.order;
+  if (order !== "asc" && order !== "desc") return res.status(400).json({ error: "order must be asc or desc" });
+  const page = q.page === undefined ? 1 : Number(q.page);
+  if (!Number.isInteger(page) || page < 1) return res.status(400).json({ error: "page must be an integer >= 1" });
+  const perPage = q.per_page === undefined ? 20 : Number(q.per_page);
+  if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) return res.status(400).json({ error: "per_page must be an integer between 1 and 100" });
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  try {
+    const countRows = await query(
+      `SELECT COUNT(*) AS n FROM rallies r JOIN videos v ON v.id = r.video_id ${whereSql}`,
+      params,
+    );
+    const total = Number(countRows[0].n);
+    const rows = await query(
+      `SELECT r.id, r.video_id AS videoId, r.start_s AS startS, r.end_s AS endS,
+              r.duration_s AS durationS, r.peak_intensity AS peakIntensityPxPerSec,
+              v.filename, v.created_at AS createdAt
+       FROM rallies r JOIN videos v ON v.id = r.video_id ${whereSql}
+       ORDER BY r.${RALLY_ORDER_BY[orderBy]} ${order.toUpperCase()}, r.id ASC
+       LIMIT ? OFFSET ?`,
+      [...params, perPage, (page - 1) * perPage],
+    );
+    res.json({ items: rows, total, page, perPage });
+  } catch (err) {
+    console.error(`[rallies] GET /api/rallies: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Upload stays synchronous (byte transfer); only analysis is queued.
@@ -135,7 +240,7 @@ app.post("/api/analytics", (req, res) => {
     "analytics",
     process.env.PYTHON_BIN || path.join(ROOT, ".venv", "bin", "python"),
     ["python/metrics.py", "--input", analysisPath, "--court", courtFile, "--output", outFile],
-    (err, stderrTail) => {
+    async (err, stderrTail) => {
       if (err) return res.status(500).json({ error: `analytics failed (${err.message}): ${stderrTail}` });
       let derived;
       try {
@@ -143,6 +248,12 @@ app.post("/api/analytics", (req, res) => {
       } catch (_e) {
         console.error(`[analytics] could not read derived output: ${outFile}`);
         return res.status(500).json({ error: `could not read derived output: ${outFile}` });
+      }
+      try {
+        await mirrorDerivedToDb(id, derived);
+      } catch (err) {
+        console.error(`[analytics] db mirror failed for ${id}: ${err.message}`);
+        return res.status(500).json({ error: `derived.json not mirrored to database: ${err.message}` });
       }
       console.log(`[analytics] done id=${id} courtSource=${courtSource} rallies=${derived.rallies.length}`);
       res.json({ courtSource, derivedPath: `/data/analysis/${id}-derived.json`, derived });
@@ -178,7 +289,7 @@ app.post("/api/trim-highlight", (req, res) => {
   });
 });
 
-app.post("/api/court", (req, res) => {
+app.post("/api/court", async (req, res) => {
   const { source, court } = req.body || {};
   const name = typeof source === "string" ? path.basename(source) : "";
   const srcPath = path.join(UPLOADS_DIR, name);
@@ -211,9 +322,24 @@ app.post("/api/court", (req, res) => {
   if (netY !== undefined) base.court.netY = netY;
   if (leftTilt !== undefined) base.court.leftTilt = leftTilt;
   if (rightTilt !== undefined) base.court.rightTilt = rightTilt;
-  const outName = `${path.parse(name).name}.json`;
+  const id = path.parse(name).name;
+  const outName = `${id}.json`;
   fs.writeFileSync(path.join(COURT_DIR, outName), JSON.stringify(base, null, 2) + "\n");
   console.log(`[court] saved data/court/${outName}`);
+  try {
+    await query(
+      `INSERT INTO calibrations (video_id, net_x, \`left\`, \`right\`, \`top\`, \`bottom\`, net_y, left_tilt, right_tilt)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE net_x = VALUES(net_x), \`left\` = VALUES(\`left\`),
+         \`right\` = VALUES(\`right\`), \`top\` = VALUES(\`top\`), \`bottom\` = VALUES(\`bottom\`),
+         net_y = VALUES(net_y), left_tilt = VALUES(left_tilt), right_tilt = VALUES(right_tilt)`,
+      [id, court.netX, court.left, court.right, court.top, court.bottom,
+       netY === undefined ? null : netY, leftTilt === undefined ? null : leftTilt, rightTilt === undefined ? null : rightTilt],
+    );
+  } catch (err) {
+    console.error(`[court] calibration upsert failed for ${outName}: ${err.message}`);
+    return res.status(500).json({ error: `calibration saved to file but database update failed: ${err.message}` });
+  }
   res.json({ saved: `data/court/${outName}` });
 });
 
