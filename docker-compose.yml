@@ -39,6 +39,8 @@ services:
       ANALYZE_CONCURRENCY: ${ANALYZE_CONCURRENCY:-1}
       # Retry cap for failed analyze jobs (exponential backoff, 5 s base); default unset → 3.
       ANALYZE_MAX_ATTEMPTS: ${ANALYZE_MAX_ATTEMPTS:-3}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL}
     # Named volume (not a host bind mount) so `docker compose down -v` gives a full fresh start.
     # Inspect with: docker cp oliver_video-data:/app/data .
     volumes:

@@ -225,7 +225,7 @@ app.get("/api/videos", async (_req, res) => {
 // Invariant: no number passes through the model; hydration uses full-precision DB rows (§4.5).
 const REPORT_LANGUAGES = new Set(["es", "en"]);
 const REPORT_AUDIENCES = new Set(["coach", "player"]);
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 // Must match the filename suffix of server/prompts/report-v1.js (spec §8: version = filename suffix).
 const REPORT_PROMPT_VERSION = "report-v1";
@@ -303,7 +303,7 @@ app.post("/api/videos/:id/report", async (req, res) => {
     try {
       httpRes = await fetch(GEMINI_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        headers: { "Content-Type": "application/json", "X-goog-api-key": `${apiKey}` },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: { temperature: 0.3, responseMimeType: "application/json", responseSchema: REPORT_OUTPUT_SCHEMA },
