@@ -20,10 +20,10 @@ Prereqs: **REP-01 doc approved** (parameters) and **REP-03 merged** (tables + AP
 - Seed must run comfortably inside `docker compose exec` on a laptop (< ~3 min); if bulk-insert tuning is needed that's implementation detail, not scope creep.
 
 ## 4. Acceptance Criteria
-- [ ] `npm run seed --fresh` completes, prints counts: videos ≥200, intensity_samples **≥500k**, rallies ≈ the spec's expected range (~19k), and matches average ~122 rallies (± sanity).
-- [ ] Determinism: a second `--fresh` run produces identical per-table counts and identical first/last rally rows for any fixed generated video id.
-- [ ] `GET /api/rallies?min_duration_s=8&order_by=intensity&order=desc&page=1` returns a plausible page (durations 3–30 s, peaks 200–950) + correct `total`; pagination walks to the end.
-- [ ] README section present with EXPLAIN showing index usage on the filtered query (no full-table-scan surprise unexplained).
+- [x] `npm run seed --fresh` completes, prints counts: videos ≥200, intensity_samples **≥500k**, rallies ≈ the spec's expected range (~19k), and matches average ~122 rallies (± sanity). — verified: 200 / 975,971 / 19,067; rally-bearing matches avg ≈123.2 (18,104/147); flat sessions = 3 × 0.
+- [x] Determinism: a second `--fresh` run produces identical per-table counts and identical first/last rally rows for any fixed generated video id. — verified: two runs → identical counts, ids and md5 of the first 500 ordered rally rows.
+- [x] `GET /api/rallies?min_duration_s=8&order_by=intensity&order=desc&page=1` returns a plausible page (durations 3–30 s, peaks 200–950) + correct `total`; pagination walks to the end. — verified: total = 16,989 = DB count of `duration_s >= 8`; global ranges duration [3,30], peak [200, 949.9]; page 850 (last) returns exactly the remaining 9 rows, page 851 empty.
+- [x] README section present with EXPLAIN showing index usage on the filtered query (no full-table-scan surprise unexplained). — "Volume dataset & EXPLAIN" section with actual captured EXPLAIN; scan + filesort explained as expected at domain-capped ~19k rows.
 
 ## 5. HUMAN GATE (owner)
 1. Run the seed; watch counts hit ≥500k and finish in reasonable time.
