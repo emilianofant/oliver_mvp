@@ -31,6 +31,8 @@ services:
 
   server:
     build: .
+    ports:
+      - "3001:3001"   # dev convenience; remove for non-local setups
     environment:
       DATABASE_URL: "mysql://oliver:oliver_dev_password@db:3306/oliver"
       REDIS_URL: redis://redis:6379
