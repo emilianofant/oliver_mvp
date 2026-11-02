@@ -97,12 +97,15 @@ On CPU, analysis takes roughly real-time or longer; the upload returns immediate
 (`POST /api/videos` → 202) and a background worker runs the analysis — poll `GET /api/jobs/<id>`
 or `GET /api/videos` for status. A large clip may take several minutes.
 
-**Architecture sketch.** Two services: `web` is an nginx container that serves the built Vite/React
-dashboard on port 80 (published as :8080) and reverse-proxies `/api/*` and `/data/*` to the `server`
-service, so all UI→API traffic stays inside the compose network. `server` runs the Node/Express API
+**Architecture sketch.** Four compose services. `db` is MySQL 8 on a named volume — source of truth
+for all API reads (`videos`, `jobs`, `rallies`, `intensity_samples`, `calibrations`, `reports`).
+`redis` is Redis 7 with AOF persistence, backing the BullMQ analysis queue (rationale in the
+'Queue choice and why' subsection of the wrap-up section below). `server` runs the Node/Express API
 (`node:20-slim` + apt python3 + ffmpeg); it spawns `python3 python/analyze.py` (YOLOv8s + ByteTrack)
 for uploads and `ffmpeg` for highlight trimming, with all runtime artifacts in a named Docker volume
-mounted at `/app/data` (inspect via `docker cp oliver_video-data:/app/data .`).
+mounted at `/app/data` (inspect via `docker cp oliver_video-data:/app/data .`). `web` is an nginx
+container that serves the built Vite/React dashboard on port 80 (published as :8080) and reverse-proxies
+`/api/*` and `/data/*` to the `server` service, so all UI→API traffic stays inside the compose network.
 The engine auto-detects CUDA vs CPU at runtime.
 
 **Fresh start.** To wipe everything (DB, queue, uploads/analysis) and rebuild from scratch:
@@ -118,9 +121,91 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 Without it (the default) no device is exposed and the engine runs on CPU. With a visible CUDA
 device the engine uses it (FP16); without one it falls back to CPU automatically — no other change needed.
 
-**Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips,
-everything stays local, and nothing is ever sent outside your machine. The model weights (~22 MB)
+**Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips; all
+analysis runs locally. The only outbound data path is the optional AI report endpoint, which — once a
+key is configured — sends derived numeric metrics only (no footage, not even filenames; see the
+'AI reports' subsection of the wrap-up section below). The model weights (~22 MB)
 auto-download into the server container on first analysis if not present.
+
+## From MVP to service: challenge wrap-up
+
+What this branch adds on top of the MVP: an async job pipeline (BullMQ + Redis with a MySQL mirror),
+a queryable rally API backed by that database, a deterministic volume dataset for EXPLAIN work, and an
+AI report endpoint. Skimmable summary below; depth is linked out to the normative design docs:
+[Seed dataset & video-type spec](docs/seed-dataset-spec.md) (REP-01) · [AI report content spec](docs/report-spec.md)
+(REP-02).
+
+### How to run it
+
+```bash
+docker compose up --build        # db + redis + server + web → dashboard at http://localhost:8080
+```
+
+- Migrations (`server/migrations/*.sql`) **apply automatically at boot** — no manual DB steps. The
+  same idempotent step can be invoked manually for dev: `npm run migrate` (from `server/`, after
+  `cd server && npm ci`) or, inside the running stack, `docker compose exec -w /app/server server npm run migrate`.
+- Copy `.env.example` → `.env` and fill in what you need; with an empty key, AI reports stay disabled
+  and return a clear 503 — everything else works without it.
+- To load volume data for rally queries / EXPLAIN work:
+  `docker compose exec -w /app/server server npm run seed -- --fresh` — see the 'Volume dataset &
+  EXPLAIN' section further down (`--fresh` TRUNCATEs all tables; that is the point).
+
+### Queue choice and why (BullMQ + Redis vs a plain MySQL jobs table)
+
+Analysis is slow on CPU (roughly real-time or longer), so the value of a queue here is its scheduling
+primitives: concurrency control via `ANALYZE_CONCURRENCY`, bounded retries with exponential backoff
+(`ANALYZE_MAX_ATTEMPTS`), and **AOF persistence** — queued/running jobs survive a restart of the server
+container for free. A plain MySQL jobs table would mean hand-rolling all of that (claim loops, retry
+counters, crash-recovery semantics) plus polling latency, and it buys nothing: reads already go through
+MySQL, because `jobs` is mirrored into MySQL as the source of truth for every API read — Redis never
+answers a request. Accepted cost: one more compose service, and a brief window where a freshly enqueued
+job exists only in Redis until its first state event is mirrored.
+
+### AI reports (model and why)
+
+- **Model:** `gemini-2.5-flash` on Google's free tier, called via plain REST with structured output
+  (JSON `responseSchema`, temperature pinned) — no SDK. Free-tier rate limits are plenty for dev volume;
+  if the lineup changes, swap one constant: the default in `server/server.js` or the `GEMINI_MODEL`
+  env var. No fallback chain is implemented — a deliberate decision, not an oversight.
+- **What leaves the machine:** derived numeric metrics only — session stats plus at most 5 candidate
+  rallies and 6 intensity windows (values rounded once to 1 decimal at the context boundary), language/
+  audience, and one UTC date. **No footage, no frames, not even filenames or video ids** — user-controlled
+  strings never enter the prompt (hard exclusion in `docs/report-spec.md` §2).
+- **Free-tier data handling:** per Google's current terms for the Gemini API free tier, submitted content
+  may be used to improve Google's products — which is exactly why only derived numbers cross that boundary.
+
+### Design decisions & trade-offs
+
+- **Index-based model references + server-side hydration** — "no number passes through the LLM": the
+  model cites `rallyIndex`/`windowIndex` only; every number in a rendered report is a DB row or a spec
+  formula, re-read at full precision after validation (`docs/report-spec.md`, §4).
+- **The summary as trust boundary** — free prose (summary/reasons) is trusted verbatim because it cannot
+  be fully number-audited without brittle heuristics; everything structural is validated, capped and
+  hydrated server-side (`docs/report-spec.md`).
+- **Per-player data excluded from model input** — known precision limitation of the player filter;
+  a documented decision, not an oversight (report spec §2 hard exclusion).
+- **Doc-only video taxonomy** — the match/clip/summary archetypes live in `docs/seed-dataset-spec.md` §1
+  only; uploads are *not* classified (there is no `videos.kind` column), because classification would be a
+  guess presented as fact.
+- **Strategy-B volume placement** — the ≥500k-row target is carried by 1 Hz intensity samples (~970k rows),
+  not padded rallies (~19k, domain-capped at ~122 points/match) ([seed dataset spec](docs/seed-dataset-spec.md)
+  §4; see the 'Volume dataset & EXPLAIN' section further down).
+- **The px/s caveat** — intensity is frame-resolution-dependent px/s, not physical speed; it applies to
+  seeded data exactly as to real data (caveat in `docs/seed-dataset-spec.md` §6).
+
+### What I'd improve with more time
+
+- Engine / player-filter precision (per-player metrics are approximate today — which is why they stay out
+  of the reports).
+- SSE progress instead of polling `GET /api/jobs/:id`.
+- A richer cross-video rally-browsing UI on the seeded data (`/api/rallies` already supports the filters,
+  sorting and pagination it needs; the dashboard shows per-video rallies from derived.json only).
+- Test suite — there is none yet, for either the server or the Python side.
+
+### AI tooling disclosure
+
+> **OWNER: fill from tracking notes (tools + how used)** — placeholder by ticket design; this block is
+> completed before the PR goes ready.
 
 ## Volume dataset & EXPLAIN
 
@@ -165,7 +250,8 @@ and exits non-zero if `intensity_samples` < 500,000.
 
 ### Canonical query & EXPLAIN
 
-The dashboard's filtered rally browser (e.g. "longest-intensity rallies") hits:
+A cross-video, filtered rally query — the endpoint was built for a rally-browser UI (the current
+dashboard shows per-video rallies from derived.json only) — e.g. "longest-intensity rallies", is served as:
 
 ```
 GET /api/rallies?min_duration_s=8&order_by=intensity&order=desc&page=1
