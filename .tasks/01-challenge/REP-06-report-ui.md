@@ -18,8 +18,8 @@ Prereq: **REP-05 merged** (endpoint live). Branch `challenge/from-mvp-to-service
 - Do not touch UPL-03 table behavior or the per-video dashboard flow beyond adding the button.
 
 ## 4. Acceptance Criteria
-- [ ] From both entry points (row + dashboard) the modal opens pre-filled with es/coach defaults and generates a report that renders readably on desktop width without horizontal scroll.
-- [ ] Loading blocks double-clicks; error shows the server's message verbatim-ish and retrying works; disabled state correct for non-done videos.
+- [x] From both entry points (row + dashboard) the modal opens pre-filled with es/coach defaults and generates a report that renders readably on desktop width without horizontal scroll. — verified in docker compose build (commit 114db38).
+- [x] Loading blocks double-clicks; error shows the server's message verbatim-ish and retrying works; disabled state correct for non-done videos. — human gate passed: es/coach read as a coach would receive it; bad GEMINI_API_KEY → clean 503 message, restored key + retry → success.
 
 ## 5. HUMAN GATE (owner)
 1. Generate es/coach for a real clip → read it in the modal exactly as a coach would receive it.
