@@ -21,9 +21,9 @@ Prereq: REP-01…REP-06 all merged and human-gated. Branch `challenge/from-mvp-t
 - README claims must match the merged code at write time (ports, env names, endpoints); no capability claims beyond what shipped.
 
 ## 4. Acceptance Criteria
-- [ ] **Cold start proof:** `docker compose down -v` → `up --build` from scratch → mysql+redis healthy, migrations applied automatically, dashboard usable; then `npm run seed --fresh` + one filtered `/api/rallies` curl works without manual DB steps.
-- [ ] `.env.example` covers every env var the stack reads (grep server code to confirm completeness); no file anywhere in the repo contains a real key or credential.
-- [ ] README section complete per §2, with both design-doc links resolving inside the repo.
+- [x] **Cold start proof:** `docker compose down -v` → `up --build` from scratch → mysql+redis healthy, migrations applied automatically, dashboard usable; then `npm run seed --fresh` + one filtered `/api/rallies` curl works without manual DB steps. — verified 2026-11-03: clean `down -v` → `up -d --build`, db+redis `(healthy)`, boot log shows both migrations applied, dashboard HTML on :8080 + `/api/videos` answered; `docker compose exec -w /app/server server npm run seed -- --fresh` exit 0 (200 videos / 19,067 rallies / 975,971 samples); filtered curls to `/api/rallies` OK via :8080 and :3001.
+- [x] `.env.example` covers every env var the stack reads (grep server code to confirm completeness); no file anywhere in the repo contains a real key or credential. — verified 2026-11-03: grep of `server/` + `Dockerfile` yields exactly DATABASE_URL, REDIS_URL, ANALYZE_CONCURRENCY, ANALYZE_MAX_ATTEMPTS, GEMINI_API_KEY (+ optional PYTHON_BIN, GEMINI_MODEL) — all in `.env.example`, placeholders only; real key lives solely in gitignored `.env`; `git grep` for the live key string over tracked files: no matches.
+- [x] README section complete per §2, with both design-doc links resolving inside the repo. — verified 2026-11-03: 'From MVP to service' section covers run/queue/AI-model/design-decisions/improvements/disclosure; `[docs/seed-dataset-spec.md](docs/seed-dataset-spec.md)` and `[docs/report-spec.md](docs/report-spec.md)` links resolve.
 
 ## 5. HUMAN GATE (owner)
 1. Do the cold start yourself (`down -v` → `up --build`) — this is also your final proof that `docker compose up` "debe seguir levantando todo, ahora también con MySQL".
