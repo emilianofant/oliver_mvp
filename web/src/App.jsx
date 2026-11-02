@@ -28,6 +28,13 @@ function numToStr(n) {
   return String(Math.round((n + Number.EPSILON) * 100) / 100);
 }
 
+// "hh:mm" for the cached-report note; returns null when the value is not parseable.
+function formatClock(value) {
+  const d = new Date(typeof value === "string" ? value.replace(" ", "T") : value);
+  if (!Number.isFinite(d.getTime())) return null;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 // Sliding 5 s windows fully contained within a single wide segment, maximizing mean of non-null intensity.
 function findStrongestSpike(frames, segments) {
   const wide = Array.isArray(segments) ? segments.filter((s) => s.type === "wide") : [];
@@ -271,6 +278,143 @@ function formatBytes(n) {
   return `${n} B`;
 }
 
+function ReportModal({ videoId, title, onClose }) {
+  const [language, setLanguage] = useState("es");
+  const [audience, setAudience] = useState("coach");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const [warnings, setWarnings] = useState([]);
+
+  // Changing the selection invalidates any report shown for the previous one.
+  function makeSelectChange(setter) {
+    return (e) => {
+      setter(e.target.value);
+      setResult(null);
+      setWarnings([]);
+      setError("");
+    };
+  }
+
+  async function handleGenerate() {
+    if (loading || !videoId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const resp = await fetch(`/api/videos/${videoId}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language, audience }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.error || `report generation failed (${resp.status})`);
+      setResult(data);
+      setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+    } catch (err) {
+      setError(err.message);
+      setResult(null);
+      setWarnings([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const report = result && result.report;
+  const cachedTime = report ? formatClock(report.createdAt) : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div role="dialog" aria-modal="true" className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+          <h3 className="truncate pr-3 text-base font-semibold" title={title}>Reporte — {title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            aria-label="Cerrar"
+            className="text-xl leading-none text-gray-500 hover:text-gray-800 disabled:cursor-not-allowed disabled:text-gray-300"
+          >
+            ×
+          </button>
+        </div>
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+          {error && (
+            <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          )}
+          {!report && !loading && !error && (
+            <div className="flex h-48 items-center justify-center rounded bg-gray-50 p-6 text-center text-sm text-gray-400">
+              Choose language and audience, then press Generate.
+            </div>
+          )}
+          {loading && (
+            <div className="flex h-48 flex-col items-center justify-center gap-3 rounded bg-gray-50 text-sm text-gray-500">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+              Generando reporte… puede tardar hasta un minuto.
+            </div>
+          )}
+          {report && !loading && (
+            <div className="space-y-2">
+              {warnings.length > 0 && (
+                <div className="flex items-start justify-between gap-3 rounded border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm text-amber-800">
+                  <span>{warnings.join(" ")}</span>
+                  <button
+                    type="button"
+                    onClick={() => setWarnings([])}
+                    aria-label="Descartar aviso"
+                    className="text-base leading-none hover:text-amber-950"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+              {result.cached && (
+                <p className="text-xs text-gray-500">{cachedTime ? `cached · ${cachedTime}` : "cached"}</p>
+              )}
+              <pre className="whitespace-pre-wrap break-words rounded bg-gray-50 p-3 font-sans text-sm leading-relaxed text-gray-900">
+                {report.rendered || "(empty report)"}
+              </pre>
+            </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-2 border-t border-gray-200 px-4 py-3">
+          <label className="text-sm">
+            <span className="mb-1 block font-medium">Language</span>
+            <select
+              value={language}
+              onChange={makeSelectChange(setLanguage)}
+              disabled={loading}
+              className="rounded border border-gray-300 bg-white px-2 py-1"
+            >
+              <option value="es">es</option>
+              <option value="en">en</option>
+            </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 block font-medium">Audience</span>
+            <select
+              value={audience}
+              onChange={makeSelectChange(setAudience)}
+              disabled={loading}
+              className="rounded border border-gray-300 bg-white px-2 py-1"
+            >
+              <option value="coach">coach</option>
+              <option value="player">player</option>
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={loading || !videoId}
+            className="ml-auto rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            {loading ? "Generating…" : "Generate"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatusChip({ job }) {
   const status = job ? job.status : "unknown";
   if (status === "done") return <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">done</span>;
@@ -294,7 +438,7 @@ function StatusChip({ job }) {
   return <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">{status}</span>;
 }
 
-function VideosTable({ videos, uploading, onOpen }) {
+function VideosTable({ videos, uploading, onOpen, onReport }) {
   if (!videos.length) {
     return (
       <div className="flex h-32 items-center justify-center rounded bg-gray-50 text-sm text-gray-400">
@@ -325,14 +469,26 @@ function VideosTable({ videos, uploading, onOpen }) {
               <StatusChip job={v.job} />
             </td>
             <td className="py-2 text-right">
-              <button
-                type="button"
-                onClick={() => onOpen(v.id)}
-                disabled={!v.job || v.job.status !== "done" || uploading}
-                className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-              >
-                Open
-              </button>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpen(v.id)}
+                  disabled={!v.job || v.job.status !== "done" || uploading}
+                  className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                >
+                  Open
+                </button>
+                <span title={v.job && v.job.status === "done" ? undefined : "analizando…"} className="inline-flex">
+                  <button
+                    type="button"
+                    onClick={() => onReport(v.id, v.filename)}
+                    disabled={!v.job || v.job.status !== "done"}
+                    className="rounded bg-purple-600 px-3 py-1 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+                  >
+                    Generar reporte
+                  </button>
+                </span>
+              </div>
             </td>
           </tr>
         ))}
@@ -550,6 +706,7 @@ export default function App() {
   const [derived, setDerived] = useState(null);
   const [analyticsRunning, setAnalyticsRunning] = useState(false);
   const [analyticsError, setAnalyticsError] = useState("");
+  const [reportFor, setReportFor] = useState(null);
 
   // Reopening a video pre-fills its saved court (if any).
   useEffect(() => {
@@ -634,6 +791,8 @@ export default function App() {
   const endSec = toSeconds(endStr);
   const windowValid = startSec != null && endSec != null && endSec > startSec;
 
+  const currentVideoId = videoUrl ? videoUrl.split("/").pop().replace(/\.mp4$/i, "") : null;
+
   function handleAutoSelect() {
     const win = findStrongestSpike(frames, segments);
     if (!win) return;
@@ -696,8 +855,16 @@ export default function App() {
         <section className="space-y-4 rounded-lg bg-white p-4 shadow">
           <UploadZone onFiles={handleFiles} uploading={uploading} />
           {uploadError && <p className="text-sm text-red-600">{uploadError}</p>}
-          <VideosTable videos={videos} uploading={uploading} onOpen={openVideo} />
+          <VideosTable
+            videos={videos}
+            uploading={uploading}
+            onOpen={openVideo}
+            onReport={(id, filename) => setReportFor({ id, title: filename })}
+          />
         </section>
+        {reportFor && (
+          <ReportModal videoId={reportFor.id} title={reportFor.title} onClose={() => setReportFor(null)} />
+        )}
       </div>
     );
   }
@@ -780,14 +947,27 @@ export default function App() {
           onLeftTiltChange={(v) => setLeftTilt(Math.min(0.5, Math.max(-0.5, v)))}
           onRightTiltChange={(v) => setRightTilt(Math.min(0.5, Math.max(-0.5, v)))}
         />
-        <button
-          type="button"
-          onClick={handleRunAnalytics}
-          disabled={!videoUrl || uploading || analyticsRunning}
-          className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-        >
-          {analyticsRunning ? "Running…" : "Run analytics"}
-        </button>
+        <div className="flex flex-wrap gap-3">
+          <button
+            type="button"
+            onClick={handleRunAnalytics}
+            disabled={!videoUrl || uploading || analyticsRunning}
+            className="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            {analyticsRunning ? "Running…" : "Run analytics"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const filename = (videos.find((v) => v.id === currentVideoId) || {}).filename;
+              setReportFor({ id: currentVideoId, title: filename || currentVideoId });
+            }}
+            disabled={!currentVideoId}
+            className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            Generar reporte
+          </button>
+        </div>
         {analyticsError && <p className="text-sm text-red-600">{analyticsError}</p>}
         {derived && (
           <div className="space-y-1 rounded bg-gray-50 p-3">
@@ -805,6 +985,9 @@ export default function App() {
           </div>
         )}
       </section>
+      {reportFor && (
+        <ReportModal videoId={reportFor.id} title={reportFor.title} onClose={() => setReportFor(null)} />
+      )}
     </div>
   );
 }
