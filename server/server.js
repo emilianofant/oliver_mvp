@@ -6,6 +6,9 @@ const express = require("express");
 const multer = require("multer");
 const { getPool, query, runMigrations } = require("./lib/db");
 const { enqueueAnalyze, startWorker } = require("./lib/analyzeQueue");
+// REP-05: AI report endpoint (Gemini) — versioned prompt + context/validation/renderer service.
+const { buildContext, validateAndHydrate, renderReport, MalformedReportError } = require("./lib/reportService");
+const { buildPrompt } = require("./prompts/report-v1");
 
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
@@ -215,6 +218,161 @@ app.get("/api/videos", async (_req, res) => {
   } catch (err) {
     console.error(`[videos] GET /api/videos: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// REP-05: POST /api/videos/:id/report — AI report strictly per docs/report-spec.md.
+// Invariant: no number passes through the model; hydration uses full-precision DB rows (§4.5).
+const REPORT_LANGUAGES = new Set(["es", "en"]);
+const REPORT_AUDIENCES = new Set(["coach", "player"]);
+const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+// Must match the filename suffix of server/prompts/report-v1.js (spec §8: version = filename suffix).
+const REPORT_PROMPT_VERSION = "report-v1";
+const REPORT_TIMEOUT_MS = 60_000;
+
+// §3 output schema as Gemini structured-output responseSchema.
+const REPORT_OUTPUT_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    summary: { type: "STRING" },
+    highlights: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: { rallyIndex: { type: "INTEGER" }, reason: { type: "STRING" } },
+        required: ["rallyIndex", "reason"],
+      },
+    },
+    intensityObservations: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: { windowIndex: { type: "INTEGER" }, note: { type: "STRING" } },
+        required: ["windowIndex", "note"],
+      },
+    },
+  },
+  required: ["summary", "highlights", "intensityObservations"],
+};
+
+function reportRowToJson(r) {
+  return { id: r.id, language: r.language, audience: r.audience, model: r.model, promptVersion: r.prompt_version, createdAt: r.created_at, content: r.content, rendered: r.rendered };
+}
+
+app.post("/api/videos/:id/report", async (req, res) => {
+  const body = req.body || {};
+  const language = body.language === undefined ? "es" : body.language;
+  const audience = body.audience === undefined ? "coach" : body.audience;
+  if (!REPORT_LANGUAGES.has(language)) return res.status(400).json({ error: "language must be 'es' or 'en'" });
+  if (!REPORT_AUDIENCES.has(audience)) return res.status(400).json({ error: "audience must be 'coach' or 'player'" });
+  const id = req.params.id;
+  try {
+    const videoRows = await query(
+      "SELECT v.id, j.status AS jobStatus FROM videos v LEFT JOIN jobs j ON j.video_id = v.id WHERE v.id = ?",
+      [id],
+    );
+    if (videoRows.length === 0) return res.status(404).json({ error: `unknown video ${id}` });
+    const jobStatus = videoRows[0].jobStatus;
+    if (jobStatus !== "done") {
+      console.log(`[report] rejected id=${id} language=${language} audience=${audience} jobStatus=${jobStatus ?? 'none'}`);
+      return res.status(409).json({ error: `the video's analyze job is '${jobStatus === null ? 'missing' : jobStatus}' — reports require a completed ('done') analysis` });
+    }
+
+    // Cache first: (video_id, language, audience) is unique per REP-03 schema.
+    const cached = await query("SELECT * FROM reports WHERE video_id = ? AND language = ? AND audience = ?", [id, language, audience]);
+    if (cached.length > 0) {
+      console.log(`[report] cache hit id=${id} language=${language} audience=${audience}`);
+      return res.json({ cached: true, report: reportRowToJson(cached[0]) });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.log(`[report] 503 id=${id} GEMINI_API_KEY missing`);
+      return res.status(503).json({ error: "GEMINI_API_KEY is not set on the server — set it in the server environment to enable AI reports" });
+    }
+
+    const { context } = await buildContext(id);
+    const prompt = buildPrompt({ language, audience, context });
+    console.log(`[report] model call id=${id} language=${language} audience=${audience} candidates=${context.highlightCandidates.length} windows=${context.intensityWindows.length}`);
+
+    // Plain REST fetch (no SDK), 60 s AbortController timeout, temperature pinned to 0.3 (spec §8).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REPORT_TIMEOUT_MS);
+    let httpRes;
+    try {
+      httpRes = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.3, responseMimeType: "application/json", responseSchema: REPORT_OUTPUT_SCHEMA },
+        }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (err.name === "AbortError") {
+        console.error(`[report] model timeout id=${id} after ${REPORT_TIMEOUT_MS / 1000}s`);
+        return res.status(504).json({ error: `the model call timed out after ${REPORT_TIMEOUT_MS / 1000} s — try again` });
+      }
+      console.error(`[report] provider unreachable id=${id}: ${err.message}`);
+      return res.status(502).json({ error: "could not reach the model provider" });
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (httpRes.status === 429) {
+      console.log(`[report] rate limited id=${id}`);
+      return res.status(429).json({ error: "rate limited — retry later" });
+    }
+    if (!httpRes.ok) {
+      // Never echo raw provider payloads to the client.
+      console.error(`[report] provider HTTP ${httpRes.status} id=${id}`);
+      return res.status(502).json({ error: "the model request failed upstream" });
+    }
+
+    let parsed;
+    try {
+      const data = await httpRes.json();
+      const parts = (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) || [];
+      const text = parts.map((p) => p.text ?? "").join("");
+      if (!text.trim()) {
+        console.error(`[report] empty model response id=${id} blockReason=${data.promptFeedback && data.promptFeedback.blockReason}`);
+        throw new Error("no content in model response");
+      }
+      parsed = JSON.parse(text);
+    } catch (err) {
+      // Malformed/unparseable model JSON → 502 safe message, no stack traces to the client.
+      console.error(`[report] malformed model output id=${id}: ${err.message}`);
+      return res.status(502).json({ error: "the model returned an invalid report" });
+    }
+
+    let result;
+    try {
+      result = await validateAndHydrate(id, parsed, language);
+    } catch (err) {
+      if (err instanceof MalformedReportError) {
+        console.error(`[report] model output failed validation id=${id}: ${err.message}`);
+        return res.status(502).json({ error: "the model returned an invalid report" });
+      }
+      throw err;
+    }
+
+    const rendered = renderReport({ language, session: context.session, content: result.content });
+    await query(
+      `INSERT INTO reports (video_id, language, audience, content, rendered, model, prompt_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE content = VALUES(content), rendered = VALUES(rendered),
+         model = VALUES(model), prompt_version = VALUES(prompt_version)`,
+      [id, language, audience, JSON.stringify(result.content), rendered, GEMINI_MODEL, REPORT_PROMPT_VERSION],
+    );
+    const stored = await query("SELECT * FROM reports WHERE video_id = ? AND language = ? AND audience = ?", [id, language, audience]);
+    console.log(`[report] stored id=${id} language=${language} audience=${audience} dropped=${result.validation.dropped}`);
+    res.json({ cached: false, report: reportRowToJson(stored[0]), validation: result.validation, warnings: result.warnings });
+  } catch (err) {
+    console.error(`[report] POST /api/videos/${id}/report failed`, err);
+    // Safe generic message: no stack traces or raw payloads to the client.
+    res.status(500).json({ error: "failed to generate report" });
   }
 });
 
