@@ -1,5 +1,9 @@
 # AI Report Content Spec (REP-02)
 
+**Status: FROZEN.** Owner approved 2026-11-02 — metric list, output schema, and the concrete
+dry-run context artifact built from real DB rows of clip `0c4a4956…` — all confirmed. REP-05
+implements strictly from this doc; any further change is a spec revision ticket, not an in-flight decision.
+
 Defines exactly what the per-video AI report contains, which numbers are computed in code vs.
 allowed to the model, and how context, validation, rendering, language, audience, prompt, and
 empty-data behavior work. This doc is normative: REP-05 implements it without making design
