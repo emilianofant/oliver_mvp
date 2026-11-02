@@ -121,3 +121,92 @@ device the engine uses it (FP16); without one it falls back to CPU automatically
 **Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips,
 everything stays local, and nothing is ever sent outside your machine. The model weights (~22 MB)
 auto-download into the server container on first analysis if not present.
+
+## Volume dataset & EXPLAIN
+
+The rally query path in `GET /api/rallies` was designed for real data that never exists at scale:
+the domain ceiling is measured, ~122 rallies per full match (see `docs/seed-dataset-spec.md`, §4),
+so even a large library of matches only yields tens of thousands of rally rows. To exercise the
+API and its indexes at volume without fabricating unrealistic data, `server/scripts/seed.js` fills
+the database with a **deterministic synthetic dataset** (fixed PRNG seed — identical structure,
+ids and rally rows on every run; only absolute timestamps anchor to run time) whose row volume
+comes from one intensity sample per second per video (~970k rows), not from padded rallies.
+Seeded videos have no media files: their `videoUrl` 404s by design, and px/s values are
+frame-resolution-dependent, same caveat as real analysis output.
+
+### Running it
+
+```bash
+cd server && npm ci
+npm run migrate                                  # idempotent; also auto-applied at server boot
+npm run seed -- --fresh                          # TRUNCATEs all six tables FIRST — see below
+```
+
+Inside the compose stack (where `DATABASE_URL` is already set on the server service):
+
+```bash
+docker compose exec server npm run seed -- --fresh
+```
+
+**Danger, by design:** `--fresh` TRUNCATEs all six tables — real uploads and their analysis data
+included. That is the point of a clean volume dataset. Without the flag the script refuses to run
+if `videos` is non-empty and prints these instructions instead. Seeding ~1M rows takes seconds.
+
+### Expected row counts (spec §4, worked at exactly 200 videos = 150 match / 30 clip / 20 summary)
+
+| Table | Formula | Worked example |
+|---|---|---|
+| `intensity_samples` | Σ videos × E[duration] ≈ n_match·6300 + n_clip·105 + n_summary·1050 | 150×6300 + 30×105 + 20×1050 ≈ **~970k** |
+| `rallies` | (n_match − 3)·≈122 + n_clip·E[U{1..6}] + n_summary·(1050/21.5) | 147×122 + 30×3.5 + ~977 ≈ **~19k** |
+
+Plus exactly one `done` row per video in `jobs`, ~60 % of videos in `calibrations`, and zero rows
+in `reports` until report generation fills them. The seed prints actual counts for all six tables
+and exits non-zero if `intensity_samples` < 500,000.
+
+### Canonical query & EXPLAIN
+
+The dashboard's filtered rally browser (e.g. "longest-intensity rallies") hits:
+
+```
+GET /api/rallies?min_duration_s=8&order_by=intensity&order=desc&page=1
+```
+
+which the endpoint turns into this exact statement (`LIMIT`/`OFFSET` per page, `per_page ≤ 100`):
+
+```sql
+SELECT r.id, r.video_id AS videoId, r.start_s AS startS, r.end_s AS endS,
+       r.duration_s AS durationS, r.peak_intensity AS peakIntensityPxPerSec,
+       v.filename, v.created_at AS createdAt
+FROM rallies r JOIN videos v ON v.id = r.video_id
+WHERE r.duration_s >= 8
+ORDER BY r.peak_intensity DESC, r.id ASC
+LIMIT 20 OFFSET 0;
+```
+
+Actual `EXPLAIN` against the seeded database (19,067 rally rows; dev credentials from
+docker-compose.yml), captured via:
+
+```bash
+docker compose exec db mysql -uoliver -poliver_dev_password oliver
+```
+
+
+| id | select_type | table | type | possible_keys | key | key_len | ref | rows | filtered | Extra |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | SIMPLE | r | ALL | idx_rallies_video_start | NULL | NULL | NULL | 19032 | 33.33 | Using where; Using filesort |
+| 1 | SIMPLE | v | eq_ref | PRIMARY | PRIMARY | 144 | oliver.r.video_id | 1 | 100.00 | NULL |
+
+### Why the indexes are what they are
+
+`rallies(video_id, start_s)` serves the dashboard's per-video rally list — equality on `video_id`
+plus chronological order — as a pure index scan with no sort, and keeps per-video lookups/counts
+cheap for any video. `videos(created_at)` serves the landing table's `ORDER BY created_at DESC` and the
+date-window filters (`date_from`/`date_to`) on this endpoint. There is deliberately **no** index
+per sort dimension (`peak_intensity`, `duration_s`, …): the rallies table is domain-capped at ~19k
+rows — that number follows from ~122 points per match, not from a row-count target (spec §4) — so
+the full scan plus filesort above touches only ~19k narrow rows and costs single-digit milliseconds.
+That `type=ALL` + `Using filesort` line in the EXPLAIN is expected at this scale, not a defect; an
+index per sort column would buy micro-seconds while paying write amplification on every derived-data
+mirror insert. The honest limit: if rallies ever grew into the millions (they can't, given the
+domain ceiling), the plan for unindexed sort/filter columns is to add one composite index per
+actual query pattern — not a generic index zoo.
