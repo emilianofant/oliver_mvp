@@ -326,12 +326,12 @@ function ReportModal({ videoId, title, onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div role="dialog" aria-modal="true" className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-          <h3 className="truncate pr-3 text-base font-semibold" title={title}>Reporte — {title}</h3>
+          <h3 className="truncate pr-3 text-base font-semibold" title={title}>Report — {title}</h3>
           <button
             type="button"
             onClick={onClose}
             disabled={loading}
-            aria-label="Cerrar"
+            aria-label="Close"
             className="text-xl leading-none text-gray-500 hover:text-gray-800 disabled:cursor-not-allowed disabled:text-gray-300"
           >
             ×
@@ -349,7 +349,7 @@ function ReportModal({ videoId, title, onClose }) {
           {loading && (
             <div className="flex h-48 flex-col items-center justify-center gap-3 rounded bg-gray-50 text-sm text-gray-500">
               <div className="h-6 w-6 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
-              Generando reporte… puede tardar hasta un minuto.
+              Generating report… can take up to a minute.
             </div>
           )}
           {report && !loading && (
@@ -360,7 +360,7 @@ function ReportModal({ videoId, title, onClose }) {
                   <button
                     type="button"
                     onClick={() => setWarnings([])}
-                    aria-label="Descartar aviso"
+                    aria-label="Dismiss warning"
                     className="text-base leading-none hover:text-amber-950"
                   >
                     ×
@@ -478,14 +478,14 @@ function VideosTable({ videos, uploading, onOpen, onReport }) {
                 >
                   Open
                 </button>
-                <span title={v.job && v.job.status === "done" ? undefined : "analizando…"} className="inline-flex">
+                <span title={v.job && v.job.status === "done" ? undefined : "analyzing…"} className="inline-flex">
                   <button
                     type="button"
                     onClick={() => onReport(v.id, v.filename)}
                     disabled={!v.job || v.job.status !== "done"}
                     className="rounded bg-purple-600 px-3 py-1 text-xs font-medium text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                   >
-                    Generar reporte
+                    Generate report
                   </button>
                 </span>
               </div>
@@ -965,7 +965,7 @@ export default function App() {
             disabled={!currentVideoId}
             className="rounded bg-purple-600 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-700 disabled:cursor-not-allowed disabled:bg-gray-300"
           >
-            Generar reporte
+            Generate report
           </button>
         </div>
         {analyticsError && <p className="text-sm text-red-600">{analyticsError}</p>}
