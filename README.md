@@ -1,82 +1,7 @@
-# oliver_video
+# oliver_video - Code Challenge
 
 Padel/tennis video player-detection project.
 
-## Setup (one-time)
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt        # ultralytics pulls torch/opencv/numpy in
-```
-
-With a CUDA GPU present, inference automatically runs on `device=0` with FP16; otherwise it
-falls back to CPU. First run auto-downloads the model weights (~22 MB) into the repo root —
-expected, not an error (the file is gitignored). Tracking uses Ultralytics' stock ByteTrack
-config (`bytetrack.yaml`, bundled with ultralytics); no custom tracker files are involved.
-
-## Running
-
-```bash
-python python/analyze.py --input samples/<clip>.mp4 [options]
-```
-
-### Arguments
-
-| Flag | Default | Description |
-|---|---|---|
-| `--input <path.mp4>` | *(required)* | Input video file. Must exist and be decodable, otherwise the script exits 1. |
-| `--model <name.pt>` | `yolov8s.pt` | Ultralytics model to use. First knob if boxes disappoint: `--model yolov8m.pt`. |
-| `--show` | off | Open a live annotated OpenCV window (person boxes + persistent track IDs) while playing the video. Quit with `q`. |
-| `--out <file>` | none | Also write the per-frame lines + summary line to this file (stdout still prints them). |
-| `--conf <float>` | ultralytics track-mode default `0.1` | Minimum detection confidence. Raise it (e.g. `0.5`) to ignore distant/crowd people; too high and occluded players drop out too. |
-| `--save-frames <dir>` | none | Save every frame annotated with the model's detections as JPGs (`frame-00000.jpg`, …) into `<dir>`. Labels show `id:<trackId> <class>` for all detected classes. |
-
-### Examples
-
-```bash
-# Headless run: per-frame lines + summary on stdout, persisted to a text file
-python python/analyze.py --input samples/00_padel.mp4 --out data/00_padel.txt
-
-# Live visual check (window with boxes + persistent IDs)
-python python/analyze.py --input samples/00_padel.mp4 --show
-
-# Annotated frame dump for later inspection, stricter confidence to drop the crowd
-python python/analyze.py --input samples/00_padel.mp4 --save-frames data/00_padel-frames --conf 0.5
-```
-
-### Output format (stdout / `--out`)
-
-One line per decoded frame, then one summary line:
-
-```
-0 players=6 ids=[1, 2, 3, 5, 6, 8]
-1 players=6 ids=[1, 2, 3, 5, 6, 8]
-...
-summary: frames=720 max_players=13 unique_track_ids=58
-```
-
-- `frameIndex` is 0-based over decoded frames.
-- `players` = number of COCO "person" boxes in that frame (any person — players **and** crowd;
-  no court/player logic at this stage).
-- `ids` = persistent ByteTrack track IDs of those persons.
-
-### Exit codes
-
-| Code | Meaning |
-|---|---|
-| `0` | Success (a clip with zero people is still a success: all frames `players=0`). |
-| `1` | Input file missing/unreadable, or the video yielded zero decoded frames (message on stderr). |
-
-## Layout
-
-```
-requirements.txt      # single dependency: ultralytics
-python/analyze.py     # the standalone preview script (Task 01)
-samples/              # your test MP4s go here (gitignored)
-data/                 # runtime artifacts: --out files, saved frames (gitignored)
-.tasks/               # project task tickets
-```
 
 ## Run with Docker
 
@@ -203,17 +128,17 @@ Code Agent: Pi
 
 ### Brief roadmap:
 - Used pi-planner to start planning the challenge. Read the challenge and gave it a prompt to design a draft and then create the tickets/tasks.
-  * Queue plan: API changes to support multiple uploads and queues. Between MySQL-only vs BullMQ, chose the latter to implement something I didn’t know.
+  * Queue plan: API changes to support multiple uploads and queues. Between MySQL-only vs BullMQ, chose the latter to implement something I haven't tried before.
   * Schema plan: to outline the data modelling for analytics.
  In this point I realized there are two big challenges: upload/queues/process and process/analytics/reporting. I split them because although upload works and the analytic engine runs, it isn’t accurate so we will need test data anyway; splitting lets me prove upload/queues/process first and then process/analytics/report.
-- 3 tasks were generated for the first part Upload/Queue
-  * Task 01: add Docker images for MySQL, Redis, modify server code to implement libraries connecting to both services. Asked for curl files to run examples, everything worked ok.
-  * Task 02: bonus to cap retries – OK
-  * Task 03: update web UI for e2e uploader, video list and statuses – OK
+- 3 tasks were generated for the first part Upload/Queue (git tag `v0.1.0`)
+  * Task UPL-01: add Docker images for MySQL, Redis, modify server code to implement libraries connecting to both services. Asked for curl files to run examples, everything worked ok.
+  * Task UPL-02: bonus to cap upload retries – OK
+  * Task UPL-03: update web UI for e2e uploader, video list and statuses; Polling for the UI where a video is being processed – OK.
 - Move to phase 2 for metrics / AI report. Two things had to be resolved first:
   * define what data we will store, and generate a sensible random seed data set (match duration, rally duration, etc.)
   * define which metrics and how they will be shown in the report
-- 7 tickets were generated
+- 7 tickets were generated (git tag `v0.2.0`)
   * Task REP-01 seed-dataset-spec: spec for the data seed, with analysis to generate filler data with meaning. Define upload types `match / clip / summary`, track intensity rows at 1 Hz.
   * Task REP-02 report-content-spec: define the spec of calculations to derive metrics that will later be passed to the LLM for the report. Key rule: the LLM does not compute, it only receives results and presents them with a coach or player profile.
   * Task REP-03 data-persistence: migrations for calibrations / rallies / intensity_samples / reports, upsert calibration on save, mirror derived.json into MySQL after analytics run and invalidate cached reports. Implement `GET /api/rallies` with filters/sort/pagination.
@@ -221,7 +146,84 @@ Code Agent: Pi
   * Task REP-05 report-endpoint: `POST /api/videos/:id/report` with context builder, versioned prompt, structured JSON validation/hydration, rendering, caching, timeout/rate-limit/error handling. Model: Gemini free tier via REST, structured output.
   * Task REP-06 report-ui: “Generar reporte” button, language/audience selectors, loading / error / empty states in the modal.
   * Task REP-07 docs-delivery: README challenge section, .env.example, cold-start verification.
+  _all tasks were commited and lived under `.tasks/01-challenge`._
+- Created PR
 
+## Python "analysis engine" setup (one-time)
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt        # ultralytics pulls torch/opencv/numpy in
+```
+
+With a CUDA GPU present, inference automatically runs on `device=0` with FP16; otherwise it
+falls back to CPU. First run auto-downloads the model weights (~22 MB) into the repo root —
+expected, not an error (the file is gitignored). Tracking uses Ultralytics' stock ByteTrack
+config (`bytetrack.yaml`, bundled with ultralytics); no custom tracker files are involved.
+
+### Running
+
+```bash
+python python/analyze.py --input samples/<clip>.mp4 [options]
+```
+
+### Arguments
+
+| Flag | Default | Description |
+|---|---|---|
+| `--input <path.mp4>` | *(required)* | Input video file. Must exist and be decodable, otherwise the script exits 1. |
+| `--model <name.pt>` | `yolov8s.pt` | Ultralytics model to use. First knob if boxes disappoint: `--model yolov8m.pt`. |
+| `--show` | off | Open a live annotated OpenCV window (person boxes + persistent track IDs) while playing the video. Quit with `q`. |
+| `--out <file>` | none | Also write the per-frame lines + summary line to this file (stdout still prints them). |
+| `--conf <float>` | ultralytics track-mode default `0.1` | Minimum detection confidence. Raise it (e.g. `0.5`) to ignore distant/crowd people; too high and occluded players drop out too. |
+| `--save-frames <dir>` | none | Save every frame annotated with the model's detections as JPGs (`frame-00000.jpg`, …) into `<dir>`. Labels show `id:<trackId> <class>` for all detected classes. |
+
+### Examples
+
+```bash
+# Headless run: per-frame lines + summary on stdout, persisted to a text file
+python python/analyze.py --input samples/00_padel.mp4 --out data/00_padel.txt
+
+# Live visual check (window with boxes + persistent IDs)
+python python/analyze.py --input samples/00_padel.mp4 --show
+
+# Annotated frame dump for later inspection, stricter confidence to drop the crowd
+python python/analyze.py --input samples/00_padel.mp4 --save-frames data/00_padel-frames --conf 0.5
+```
+
+### Output format (stdout / `--out`)
+
+One line per decoded frame, then one summary line:
+
+```
+0 players=6 ids=[1, 2, 3, 5, 6, 8]
+1 players=6 ids=[1, 2, 3, 5, 6, 8]
+...
+summary: frames=720 max_players=13 unique_track_ids=58
+```
+
+- `frameIndex` is 0-based over decoded frames.
+- `players` = number of COCO "person" boxes in that frame (any person — players **and** crowd;
+  no court/player logic at this stage).
+- `ids` = persistent ByteTrack track IDs of those persons.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (a clip with zero people is still a success: all frames `players=0`). |
+| `1` | Input file missing/unreadable, or the video yielded zero decoded frames (message on stderr). |
+
+### Layout
+
+```
+requirements.txt      # single dependency: ultralytics
+python/analyze.py     # the standalone preview script (Task 01)
+samples/              # your test MP4s go here (gitignored)
+data/                 # runtime artifacts: --out files, saved frames (gitignored)
+.tasks/               # project task tickets
+```
 ## Volume dataset & EXPLAIN
 
 The rally query path in `GET /api/rallies` was designed for real data that never exists at scale:
