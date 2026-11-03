@@ -155,7 +155,7 @@ job exists only in Redis until its first state event is mirrored.
 
 ### AI reports (model and why)
 
-- **Model:** `gemini-3.5-flash` on Google's free tier, called via plain REST with structured output
+- **Model:** `gemini-3.5-flash-lite` on Google's free tier, called via plain REST with structured output
   (JSON `responseSchema`, temperature pinned) — no SDK. Free-tier rate limits are plenty for dev volume;
   if the lineup changes, swap one constant: the default in `server/server.js` or the `GEMINI_MODEL`
   env var. No fallback chain is implemented — a deliberate decision, not an oversight.
