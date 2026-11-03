@@ -26,4 +26,8 @@ RUN cd server && npm ci
 
 COPY python ./python
 
-CMD ["node", "server/server.js"]
+# Runtime workdir = server/ so `docker compose exec server npm run ...` finds package.json.
+# App code resolves every path via __dirname, and spawned children set cwd explicitly, so the
+# app is insensitive to this; CMD names the file directly instead of relying on /app.
+WORKDIR /app/server
+CMD ["node", "server.js"]

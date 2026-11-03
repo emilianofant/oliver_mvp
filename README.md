@@ -44,9 +44,9 @@ What this branch adds on top of the MVP: an async job pipeline (BullMQ + Redis w
 docker compose up --build        # db + redis + server + web → dashboard at http://localhost:8080
 ```
 
-- Migrations (`server/migrations/*.sql`) **apply automatically at boot** — no manual DB steps. The same idempotent step can be invoked manually for dev: `npm run migrate` (from `server/`, after `cd server && npm ci`) or, inside the running stack, `docker compose exec -w /app/server server npm run migrate`.
+- Migrations (`server/migrations/*.sql`) **apply automatically at boot** — no manual DB steps. The same idempotent step can be invoked manually for dev: `npm run migrate` (from `server/`, after `cd server && npm ci`) or, inside the running stack, `docker compose exec server npm run migrate`.
 - Copy `.env.example` → `.env` and fill in what you need; with an empty key, AI reports stay disabled and return a clear 503 — everything else works without it.
-- To load volume data for rally queries / EXPLAIN work: `docker compose exec -w /app/server server npm run seed -- --fresh` — see the 'Volume dataset & EXPLAIN' section further down (`--fresh` TRUNCATEs all tables; that is the point).
+- To load volume data for rally queries / EXPLAIN work: `docker compose exec server npm run seed -- --fresh` — see the 'Volume dataset & EXPLAIN' section further down (`--fresh` TRUNCATEs all tables; that is the point).
 
 ### Queue choice and why (BullMQ + Redis vs a plain MySQL jobs table)
 
