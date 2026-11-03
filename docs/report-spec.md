@@ -1,6 +1,6 @@
 # AI Report Content Spec (REP-02)
 
-**Status: FROZEN.** Owner approved 2026-11-02 — metric list, output schema, and the concrete
+**Status: FROZEN (revised 2026-11-03 — see §9).** Owner approved 2026-11-02 — metric list, output schema, and the concrete
 dry-run context artifact built from real DB rows of clip `0c4a4956…` — all confirmed. REP-05
 implements strictly from this doc; any further change is a spec revision ticket, not an in-flight decision.
 
@@ -177,7 +177,7 @@ Defaults: `language=es`, `audience=coach`. Values outside `language ∈ {es,en}`
 | audience | Framing the prompt must request |
 |---|---|
 | `coach` | tactical/technical framing with actionable observations |
-| `player` | simpler, motivational wording |
+| `player` | simple, friendly and motivational wording for a person who may have played in or is watching the session; never assume who the reader is (no individual attribution) |
 
 Both audiences are generated from the **same underlying numbers** — no per-audience metric differences;
 only tone/framing changes. `language` controls the language of all model prose (labels in §7 follow it).
@@ -204,8 +204,8 @@ hydrated full-precision values; intensities rendered with 1 decimal.
 {summary}                              {summary}
 
 ## Momentos destacados                 ## Highlights
-- Punto {rallyIndex}: {start m:ss}–{end m:ss} · pico {peak}px/s — {reason}
-- Point {rallyIndex}: {start m:ss}–{end m:ss} · peak {peak}px/s — {reason}
+- Punto {rallyIndex}: {start m:ss}–{end m:ss} — {reason}
+- Point {rallyIndex}: {start m:ss}–{end m:ss} — {reason}
 
 ## Intensidad a lo largo del video     ## Intensity over time
 - Ventana {windowIndex} ({fromS m:ss}–{toS m:ss}): {note}
@@ -216,9 +216,12 @@ Stats lines (rendered by code from §1.1 values, inside "Resumen general", befor
 
 | line | es | en | omission rule |
 |---|---|---|---|
-| 1 | `- {rallyCount} puntos · tiempo activo {totalActiveTimeSec}s ({activeTimePct}% del video)` | `{rallyCount} points · active time {totalActiveTimeSec}s ({activeTimePct}% of the video)` | drop `({…}%)` part if `activeTimePct` null; line always present (`0 puntos` when empty) |
+| 1 | `- {rallyCount} puntos · tiempo activo {activeTime} ({activeTimePct}% del video)` | `{rallyCount} points · active time {activeTime} ({activeTimePct}% of the video)` | drop `({…}%)` part if `activeTimePct` null; line always present (`0 puntos` when empty) |
 | 2 | `- duración media {avgRallyDurSec}s · mediana {medianRallyDurSec}s` | `average duration {avgRallyDurSec}s · median {medianRallyDurSec}s` | whole line omitted if null (no rallies) |
 | 3 | `- punto más largo: {longestRally.durationS}s desde {startS m:ss}` | `longest point: {longestRally.durationS}s from {startS m:ss}` | whole line omitted if null |
+
+Units of `{activeTime}` (rendering only — context keeps seconds, §1.1): < 60 s → seconds as in the
+context value; [60, 600) s → minutes with 1 decimal; ≥ 600 s → whole minutes (half-up). Example: 991 s → `17 min`.
 
 Fixed lines for empty sections (code constants, not model prose): es
 `No se detectaron momentos destacados.` / `Sin ventanas de intensidad disponibles.` — en
@@ -230,8 +233,8 @@ Footer, appended only when `session.calibration = 'default'`: es
 
 ## 8. Prompt & model contract
 
-- The prompt lives at **`server/prompts/report-v1.js`** and exports `buildPrompt({language, audience,
-  context})` → the full instruction text as a single string. Version = filename suffix (`report-v1`)
+- The prompt lives at **`server/prompts/report-v2.js`** and exports `buildPrompt({language, audience,
+  context})` → the full instruction text as a single string. Version = filename suffix (`report-v2`)
   and is stored as `prompt_version` on every report row — bumping the file name bumps the version.
 - The prompt **must embed**: (a) task + audience/language framing in the target language; (b) the §2
   context JSON **verbatim** (`JSON.stringify(context)`); (c) the anti-fabrication instruction, pinned
@@ -241,7 +244,24 @@ Footer, appended only when `session.calibration = 'default'`: es
   report is inserted from the database."*; (d) summary steering per §4 (qualitative references; concrete
   times only for provided windows); (e) the §3 output schema verbatim plus its length/membership rules;
   (f) "return ONLY valid JSON, no markdown fences".
+- Since `report-v2`, the prompt additionally steers (additive; the items above remain mandatory):
+  `"summary"` must not restate the rendered stats lines and expresses session length only in minutes
+  (never raw seconds); each `"reason"`/`"note"` explains why the moment matters using qualitative
+  intensity language, without units. The `player` audience is addressed neutrally (the reader may have
+  played in or be watching the session — no assumption about who the reader is); neither audience may
+  mention winners/losers or any scoreline.
 - Generation is pinned to **temperature 0.3** and requires structured JSON output (the exact
   `generationConfig` keys are REP-05's provider detail). Model/provider specifics (Gemini free tier,
   model id) are REP-05 implementation details and README material — this doc stays model-agnostic except
   where it constrains behavior.
+
+---
+
+## 9. Revision log
+
+- **2026-11-03** — owner feedback on a real coach report: stats line 1 renders active time in minutes
+  when ≥ 60 s (§7); highlight lines drop `pico/peak …px/s`, so qualitative interpretation is carried by
+  model prose only (hydrated `content` shape unchanged, §4). Prompt version bumped to `report-v2`
+  with the added summary/reason steering; `player` framing neutralized (reader may have played in or be
+  watching the session — no individual attribution); win/loss/score claims banned for both audiences;
+  training prescriptions removed from the coach framing.

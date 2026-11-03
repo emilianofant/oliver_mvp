@@ -8,7 +8,7 @@ const { getPool, query, runMigrations } = require("./lib/db");
 const { enqueueAnalyze, startWorker } = require("./lib/analyzeQueue");
 // REP-05: AI report endpoint (Gemini) — versioned prompt + context/validation/renderer service.
 const { buildContext, validateAndHydrate, renderReport, MalformedReportError } = require("./lib/reportService");
-const { buildPrompt } = require("./prompts/report-v1");
+const { buildPrompt } = require("./prompts/report-v2");
 
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
@@ -227,8 +227,8 @@ const REPORT_LANGUAGES = new Set(["es", "en"]);
 const REPORT_AUDIENCES = new Set(["coach", "player"]);
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-// Must match the filename suffix of server/prompts/report-v1.js (spec §8: version = filename suffix).
-const REPORT_PROMPT_VERSION = "report-v1";
+// Must match the filename suffix of server/prompts/report-v2.js (spec §8: version = filename suffix).
+const REPORT_PROMPT_VERSION = "report-v2";
 const REPORT_TIMEOUT_MS = 60_000;
 
 // §3 output schema as Gemini structured-output responseSchema.

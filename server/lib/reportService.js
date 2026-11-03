@@ -200,16 +200,22 @@ async function validateAndHydrate(videoId, modelOutput, language) {
 
 // §7 — rendered markdown stored in reports.rendered. Labels per request language; m:ss from full-precision values.
 const MS = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+// §7 — active-time units: <60 s as seconds; [60, 600) s as minutes with 1 decimal; ≥600 s as whole minutes.
+const FMT_ACTIVE = (sec) => {
+  if (sec < 60) return `${round1(sec)}s`;
+  if (sec < 600) return `${(Math.round((sec / 60) * 10)) / 10} min`;
+  return `${Math.round(sec / 60)} min`;
+};
 
 const LABELS = {
   es: {
     summary: "Resumen general",
     highlights: "Momentos destacados",
     intensity: "Intensidad a lo largo del video",
-    stats1: (s) => `- ${s.rallyCount} puntos · tiempo activo ${s.totalActiveTimeSec}s${s.activeTimePct === null ? "" : ` (${s.activeTimePct}% del video)`}`,
+    stats1: (s) => `- ${s.rallyCount} puntos · tiempo activo ${FMT_ACTIVE(s.totalActiveTimeSec)}${s.activeTimePct === null ? "" : ` (${s.activeTimePct}% del video)`}`,
     stats2: (s) => `- duración media ${s.avgRallyDurSec}s · mediana ${s.medianRallyDurSec}s`,
     stats3: (s) => `- punto más largo: ${s.longestRally.durationS}s desde ${MS(s.longestRally.startS)}`,
-    highlightLine: (h) => `- Punto ${h.rallyIndex}: ${MS(h.startS)}–${MS(h.endS)} · pico ${h.peakIntensityPxPerSec.toFixed(1)}px/s — ${h.reason}`,
+    highlightLine: (h) => `- Punto ${h.rallyIndex}: ${MS(h.startS)}–${MS(h.endS)} — ${h.reason}`,
     windowLine: (o) => `- Ventana ${o.windowIndex} (${MS(o.fromS)}–${MS(o.toS)}): ${o.note}`,
     emptyHighlights: "No se detectaron momentos destacados.",
     emptyIntensity: "Sin ventanas de intensidad disponibles.",
@@ -219,10 +225,10 @@ const LABELS = {
     summary: "Overall summary",
     highlights: "Highlights",
     intensity: "Intensity over time",
-    stats1: (s) => `- ${s.rallyCount} points · active time ${s.totalActiveTimeSec}s${s.activeTimePct === null ? "" : ` (${s.activeTimePct}% of the video)`}`,
+    stats1: (s) => `- ${s.rallyCount} points · active time ${FMT_ACTIVE(s.totalActiveTimeSec)}${s.activeTimePct === null ? "" : ` (${s.activeTimePct}% of the video)`}`,
     stats2: (s) => `- average duration ${s.avgRallyDurSec}s · median ${s.medianRallyDurSec}s`,
     stats3: (s) => `- longest point: ${s.longestRally.durationS}s from ${MS(s.longestRally.startS)}`,
-    highlightLine: (h) => `- Point ${h.rallyIndex}: ${MS(h.startS)}–${MS(h.endS)} · peak ${h.peakIntensityPxPerSec.toFixed(1)}px/s — ${h.reason}`,
+    highlightLine: (h) => `- Point ${h.rallyIndex}: ${MS(h.startS)}–${MS(h.endS)} — ${h.reason}`,
     windowLine: (o) => `- Window ${o.windowIndex} (${MS(o.fromS)}–${MS(o.toS)}): ${o.note}`,
     emptyHighlights: "No standout moments were detected.",
     emptyIntensity: "No intensity windows available.",
