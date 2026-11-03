@@ -196,8 +196,31 @@ job exists only in Redis until its first state event is mirrored.
 
 ### AI tooling disclosure
 
-> **OWNER: fill from tracking notes (tools + how used)** — placeholder by ticket design; this block is
-> completed before the PR goes ready.
+Code Agent: Pi
+ - Profile Planner: for planning and creation of tasks / specs
+ - Profile Coder: for atomically tackling each task
+ - Model used: Qwen 3.8 27b Q4_K_M
+
+### Brief roadmap:
+- Used pi-planner to start planning the challenge. Read the challenge and gave it a prompt to design a draft and then create the tickets/tasks.
+  * Queue plan: API changes to support multiple uploads and queues. Between MySQL-only vs BullMQ, chose the latter to implement something I didn’t know.
+  * Schema plan: to outline the data modelling for analytics.
+ In this point I realized there are two big challenges: upload/queues/process and process/analytics/reporting. I split them because although upload works and the analytic engine runs, it isn’t accurate so we will need test data anyway; splitting lets me prove upload/queues/process first and then process/analytics/report.
+- 3 tasks were generated for the first part Upload/Queue
+  * Task 01: add Docker images for MySQL, Redis, modify server code to implement libraries connecting to both services. Asked for curl files to run examples, everything worked ok.
+  * Task 02: bonus to cap retries – OK
+  * Task 03: update web UI for e2e uploader, video list and statuses – OK
+- Move to phase 2 for metrics / AI report. Two things had to be resolved first:
+  * define what data we will store, and generate a sensible random seed data set (match duration, rally duration, etc.)
+  * define which metrics and how they will be shown in the report
+- 7 tickets were generated
+  * Task REP-01 seed-dataset-spec: spec for the data seed, with analysis to generate filler data with meaning. Define upload types `match / clip / summary`, track intensity rows at 1 Hz.
+  * Task REP-02 report-content-spec: define the spec of calculations to derive metrics that will later be passed to the LLM for the report. Key rule: the LLM does not compute, it only receives results and presents them with a coach or player profile.
+  * Task REP-03 data-persistence: migrations for calibrations / rallies / intensity_samples / reports, upsert calibration on save, mirror derived.json into MySQL after analytics run and invalidate cached reports. Implement `GET /api/rallies` with filters/sort/pagination.
+  * Task REP-04 seed-explain: deterministic seed script implementation + EXPLAIN analysis and index rationale documented in README.
+  * Task REP-05 report-endpoint: `POST /api/videos/:id/report` with context builder, versioned prompt, structured JSON validation/hydration, rendering, caching, timeout/rate-limit/error handling. Model: Gemini free tier via REST, structured output.
+  * Task REP-06 report-ui: “Generar reporte” button, language/audience selectors, loading / error / empty states in the modal.
+  * Task REP-07 docs-delivery: README challenge section, .env.example, cold-start verification.
 
 ## Volume dataset & EXPLAIN
 
