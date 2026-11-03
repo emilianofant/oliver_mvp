@@ -21,8 +21,6 @@ config (`bytetrack.yaml`, bundled with ultralytics); no custom tracker files are
 python python/analyze.py --input samples/<clip>.mp4 [options]
 ```
 
-Drop your own short padel/tennis MP4(s) into `samples/` (binaries there are gitignored).
-
 ### Arguments
 
 | Flag | Default | Description |
@@ -121,12 +119,6 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
 Without it (the default) no device is exposed and the engine runs on CPU. With a visible CUDA
 device the engine uses it (FP16); without one it falls back to CPU automatically — no other change needed.
 
-**Data & privacy.** `samples/` and `data/` are intentionally untracked: upload your own clips; all
-analysis runs locally. The only outbound data path is the optional AI report endpoint, which — once a
-key is configured — sends derived numeric metrics only (no footage, not even filenames; see the
-'AI reports' subsection of the wrap-up section below). The model weights (~22 MB)
-auto-download into the server container on first analysis if not present.
-
 ## From MVP to service: challenge wrap-up
 
 What this branch adds on top of the MVP: an async job pipeline (BullMQ + Redis with a MySQL mirror),
@@ -163,7 +155,7 @@ job exists only in Redis until its first state event is mirrored.
 
 ### AI reports (model and why)
 
-- **Model:** `gemini-2.5-flash` on Google's free tier, called via plain REST with structured output
+- **Model:** `gemini-3.5-flash` on Google's free tier, called via plain REST with structured output
   (JSON `responseSchema`, temperature pinned) — no SDK. Free-tier rate limits are plenty for dev volume;
   if the lineup changes, swap one constant: the default in `server/server.js` or the `GEMINI_MODEL`
   env var. No fallback chain is implemented — a deliberate decision, not an oversight.
