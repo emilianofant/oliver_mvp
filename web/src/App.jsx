@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -33,6 +33,39 @@ function formatClock(value) {
   const d = new Date(typeof value === "string" ? value.replace(" ", "T") : value);
   if (!Number.isFinite(d.getTime())) return null;
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Recharts is slow with tens of thousands of points (a 30-min clip at step=1 is ~45k frames).
+// Decimate for display only: keep min & max intensity per bucket — always real frames, never
+// synthesized values — so spikes stay visible. Bounded by CHART_POINT_LIMIT.
+const CHART_POINT_LIMIT = 2000;
+
+function downsampleForChart(frames) {
+  const limit = CHART_POINT_LIMIT;
+  if (!Array.isArray(frames) || frames.length <= limit) return frames;
+  const buckets = Math.floor(limit / 2); // ≤2 points per bucket → total ≤ limit
+  const out = [];
+  for (let b = 0; b < buckets; b++) {
+    const start = Math.floor((b * frames.length) / buckets);
+    const end = Math.min(frames.length, Math.floor(((b + 1) * frames.length) / buckets));
+    let minF = null;
+    let maxF = null;
+    for (let i = start; i < end; i++) {
+      const f = frames[i];
+      if (minF == null || (f.intensity ?? -Infinity) <= (minF.intensity ?? -Infinity)) minF = f;
+      if (maxF == null || (f.intensity ?? -Infinity) >= (maxF.intensity ?? -Infinity)) maxF = f;
+    }
+    if (minF == null) continue;
+    const [a, c] = minF.t <= maxF.t ? [minF, maxF] : [maxF, minF];
+    out.push(a);
+    if (c !== a) out.push(c);
+  }
+  // keep exact first/last frames so the axis still spans the full duration
+  const first = frames[0];
+  const last = frames[frames.length - 1];
+  if (out[0] !== first) out.unshift(first);
+  if (out[out.length - 1] !== last) out.push(last);
+  return out;
 }
 
 // Sliding 5 s windows fully contained within a single wide segment, maximizing mean of non-null intensity.
@@ -791,6 +824,13 @@ export default function App() {
   const endSec = toSeconds(endStr);
   const windowValid = startSec != null && endSec != null && endSec > startSec;
 
+  // Display-only decimation; raw `frames` still back auto-select and the tooltip-free controls.
+  const chartFrames = useMemo(() => downsampleForChart(frames), [frames]);
+  const closeSegments = useMemo(
+    () => segments.filter((s) => s.type === "close"),
+    [segments]
+  );
+
   const currentVideoId = videoUrl ? videoUrl.split("/").pop().replace(/\.mp4$/i, "") : null;
 
   function handleAutoSelect() {
@@ -904,8 +944,8 @@ export default function App() {
           <h2 className="font-semibold">Player activity / intensity over time</h2>
           {frames.length > 0 ? (
             <IntensityChart
-            frames={frames}
-            closeSegments={segments.filter((s) => s.type === "close")}
+            frames={chartFrames}
+            closeSegments={closeSegments}
             rallies={derived ? derived.rallies : []}
             startSec={startSec}
             endSec={endSec}
