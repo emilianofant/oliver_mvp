@@ -11,3 +11,5 @@ web/node_modules/
 web/dist/
 Glossary.md
 .tasks/reports
+.env
+.tasks/research
